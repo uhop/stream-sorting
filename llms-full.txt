@@ -34,6 +34,8 @@ The design point is "sort a billion records on a laptop without OOMing." In-memo
 
 The k-way-merge phase is exactly the shape `stream-join`'s `select(streams, options)` was designed for, with `sortedInsert(lessFn)` as the `insert` callback and `pickFirst` as the `pick` callback. Reusing those primitives instead of reimplementing is intentional — it keeps the merge logic in one place, tested in one place, and the two packages co-evolve naturally.
 
+`stream-join` is not yet a declared runtime dependency: its 2.0.0 has not been published as of scaffold time (2026-05-19). The component implementations that need `select` + `sortedInsert` are blocked on that release; once it ships, `stream-join` joins `stream-chain` in `dependencies` and the components land.
+
 ## API reference
 
 ### `sort(stream, options)` — external merge sort (planned)
