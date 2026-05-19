@@ -1,0 +1,232 @@
+# stream-sorting — full reference
+
+External merge sort and sorted-stream operations for object-mode Node `Readable` streams. Part of the `stream-chain` / `stream-json` / `stream-join` family. This file is the long-form AI-facing reference; `llms.txt` is the short summary.
+
+## Status
+
+The package is in scaffold phase as of 2026-05-19. Repo and fleet conventions are in place; components below marked **(planned)** are not yet implemented. The shape captured here is the design target — implementation lands incrementally per `projects/stream-sorting/queue.md` in Eugene's vault.
+
+## Design context
+
+### Why a separate package
+
+The `stream-*` family separates concerns by *what the operation knows about the data*:
+
+- **`stream-chain`** — pipeline plumbing. Knows nothing about data shape.
+- **`stream-json`** — JSON streaming. Knows about JSON tokens.
+- **`stream-join`** — N→1 combinators. Knows about Readable streams but **not** about sortedness or keys.
+- **`stream-fork`** — 1→N split / route / filter. Knows about predicates but not sortedness.
+- **`stream-sorting`** — **knows about sortedness**. Anything that requires sorted input or produces sorted output lives here.
+
+The split was settled 2026-05-18 during the stream-join 2.x scope-rationalization pass. `stream-join` deliberately rejected being a home for sort and sort-dependent ops; this package picks them up.
+
+### Why disk-backed external merge sort
+
+Three strategies were considered for the sort engine:
+
+1. **In-memory full buffer** — pulls the entire input into an array, sorts, emits. Simple, but scales to RAM only. Rejected for the package's design point.
+2. **Sliding-window approximate sort** — buffer the last N items, emit min on every advance. Constant memory, but does **not** actually sort if the input's disorder exceeds the window. Rejected as a misleading API.
+3. **Disk-backed external merge sort** — pull into a memory-bounded buffer, sort + flush to disk as a run, repeat until input ends; k-way-merge the runs streaming-style. Sorts at arbitrary cardinality regardless of memory. **Chosen.**
+
+The design point is "sort a billion records on a laptop without OOMing." In-memory sort isn't an API surface this package needs because `await stream.toArray()` + `Array.prototype.sort(compare)` is already one line of user code; the value-add is the part that doesn't fit in memory.
+
+### Why depend on `stream-join`
+
+The k-way-merge phase is exactly the shape `stream-join`'s `select(streams, options)` was designed for, with `sortedInsert(lessFn)` as the `insert` callback and `pickFirst` as the `pick` callback. Reusing those primitives instead of reimplementing is intentional — it keeps the merge logic in one place, tested in one place, and the two packages co-evolve naturally.
+
+## API reference
+
+### `sort(stream, options)` — external merge sort (planned)
+
+Sorts an object-mode `Readable` stream of arbitrary cardinality. Returns a new object-mode `Readable` of the same items in `compare` order.
+
+**Signature:**
+
+```ts
+function sort<T>(
+  stream: Readable,
+  options: {
+    compare: (a: T, b: T) => number;
+    memoryBudget?: number;
+    tmpDir?: string;
+    cleanup?: boolean;
+    serialize?: (item: T) => Buffer | string;
+    deserialize?: (chunk: Buffer | string) => T;
+  }
+): Readable;
+```
+
+**Parameters:**
+
+- `compare` (required) — `Array.prototype.sort`-style comparator. Returns negative if `a < b`, positive if `a > b`, zero if equal. The comparator must be consistent (transitive, antisymmetric, reflexive on equality) or the output is undefined.
+- `memoryBudget` — soft cap on in-memory items per run, expressed as either an item count (>0 integer) or a byte estimate (TBD). Default TBD; likely ~64 MB equivalent.
+- `tmpDir` — directory where sorted-run files are written. Default: `os.tmpdir()`. Files are named with a unique prefix per `sort()` call.
+- `cleanup` — delete run files after the output ends or errors. Default: `true`. Set to `false` for debugging or if downstream wants to re-merge the same runs.
+- `serialize` / `deserialize` — on-disk encoding hooks. Defaults: JSON line-delimited (`JSON.stringify` + `JSON.parse` + newline framing). Override for non-JSON-friendly payloads (Buffers, Dates, BigInts, custom classes).
+
+**Returns:** an object-mode `Readable` that emits items in `compare` order. Backpressure flows naturally — the merge generator only advances when the output is drained.
+
+**Run formation:** as items arrive, they accumulate in an in-memory buffer until `memoryBudget` is hit. Then the buffer is sorted with `Array.prototype.sort(compare)` and flushed to a run file. Repeat until input ends.
+
+**k-way merge:** all run files are opened as object-mode `Readable` streams (one per file, deserialized via `deserialize`). They are merged via `stream-join`'s `select` + `sortedInsert(lessFn)` adapter (where `lessFn(a, b) = compare(a, b) < 0`). Output yielded through `stream-chain`'s `readableFrom`.
+
+**Edge cases:**
+- Empty input: emits zero values and ends.
+- Single in-memory chunk (input fits in `memoryBudget`): no disk write, sorts in memory, emits directly. Fast-path.
+- Input emits before all runs are written: backpressure stalls the run-formation loop; producer pauses.
+- Comparator throws: the error propagates as the output's `'error'` event; run files cleaned up.
+
+### `mergeJoin(streamA, streamB, options)` / `joinBy` — key-based join of sorted streams (planned)
+
+```ts
+function mergeJoin<A, B, K, R>(
+  streamA: Readable,
+  streamB: Readable,
+  options: {
+    keyFn?: (item: A | B) => K;
+    keyA?: (item: A) => K;
+    keyB?: (item: B) => K;
+    compareKey?: (a: K, b: K) => number;
+    combine?: (rowA: A | null, rowB: B | null) => R;
+    variant?: 'inner' | 'left' | 'right' | 'full';
+  }
+): Readable;
+```
+
+**Pre-condition:** both inputs are sorted by the join key under `compareKey`.
+
+**Variants:**
+- `'inner'` (default) — emit only when both sides have a row at the current key.
+- `'left'` — also emit unmatched left rows with `rowB = null`.
+- `'right'` — also emit unmatched right rows with `rowA = null`.
+- `'full'` — also emit unmatched rows on either side.
+
+**Defaults:**
+- `keyFn = identity` if neither `keyA` nor `keyB` is given.
+- `compareKey` — default ordering (`<` / `>`).
+- `combine = (a, b) => ({...a, ...b})` — shallow merge.
+
+Equal keys on either side (multi-row groups) form a Cartesian product, like SQL joins. Implementation walks both streams via `stream-join`'s `select` + `sortedInsert(byKey)`, advancing the side with the smaller key on non-matches.
+
+### `mergeSorted(streams, lessFn, options?)` — sorted merge without dedup (planned)
+
+```ts
+function mergeSorted<T>(
+  streams: Readable[],
+  lessFn: (a: T, b: T) => boolean,
+  options?: {
+    /* TBD — likely passed through to readableFrom */
+  }
+): Readable;
+```
+
+k-way merge of pre-sorted input streams. Each item from any input appears once in the output; duplicates across streams are preserved (use `union` for dedup).
+
+Equivalent to `stream-join/utils/merge-sorted`. Open decision (see `projects/stream-sorting/queue.md`): whether `stream-join`'s copy becomes a re-export from here, or both packages keep an independent copy.
+
+### Set operations on sorted streams (planned)
+
+```ts
+function union<T>(streams: Readable[], lessFn: (a: T, b: T) => boolean): Readable;
+function intersection<T>(streams: Readable[], lessFn: (a: T, b: T) => boolean): Readable;
+function difference<T>(streamA: Readable, streamsB: Readable[], lessFn: (a: T, b: T) => boolean): Readable;
+```
+
+All take pre-sorted inputs under `lessFn` and emit a sorted output.
+
+- **`union`** — sorted merge with duplicate elimination across streams. `{1,2,3} ∪ {2,3,4} = {1,2,3,4}`. Distinct from `mergeSorted` which preserves duplicates. Implementation: `select` + `sortedInsert` wrapping the picker with "skip if equal to last emitted."
+- **`intersection`** — values present in **all** streams. 2-way walks both, emitting on match; k-way tracks the current key across all and emits when all agree.
+- **`difference`** — values in `streamA` not present in any `streamsB[i]`. 2-way walks both, emitting from A when smaller, skipping when equal, advancing B when smaller.
+
+Equality is defined by `!lessFn(a, b) && !lessFn(b, a)` — i.e., neither is less than the other.
+
+## Composition examples
+
+### Sort a stream of records by ID
+
+```js
+const sort = require('stream-sorting/sort');
+const {pipeline} = require('node:stream/promises');
+
+await pipeline(
+  input,
+  sort(input, {compare: (a, b) => a.id - b.id}),
+  output
+);
+```
+
+### Join two large feeds by ID
+
+```js
+const sort = require('stream-sorting/sort');
+const mergeJoin = require('stream-sorting/merge-join');
+
+const byId = (a, b) => a.id - b.id;
+
+const sortedLeft = sort(left,  {compare: byId});
+const sortedRight = sort(right, {compare: byId});
+
+const joined = mergeJoin(sortedLeft, sortedRight, {
+  keyFn: r => r.id,
+  combine: (l, r) => ({...l, ...r}),
+  variant: 'left'
+});
+
+joined.pipe(output);
+```
+
+### Deduplicate across N pre-sorted feeds
+
+```js
+const union = require('stream-sorting/union');
+const lessByKey = (a, b) => a.key < b.key;
+
+union([feed1, feed2, feed3], lessByKey).pipe(output);
+```
+
+## Performance notes
+
+- The `memoryBudget` knob is a **soft** cap — actual memory varies with item size. Tune for the workload.
+- The k-way merge cost is `O(N log k)` where `N` is total items and `k` is the number of runs. Smaller `memoryBudget` → more runs → log factor grows; large `memoryBudget` → fewer runs but higher peak RAM. Default is a starting point, not a prescription.
+- Disk I/O dominates for cardinalities that overflow RAM. SSDs are the assumed deployment target; spinning disks work but slower.
+- The `serialize` / `deserialize` hooks are the per-item hot path on disk-backed runs; for high-throughput pipelines, custom binary encodings can outperform the default JSON.
+
+## Composition with `stream-chain`
+
+The package's outputs are plain `Readable` streams. They drop into `stream-chain` pipelines without adapters:
+
+```js
+const chain = require('stream-chain');
+const sort = require('stream-sorting/sort');
+
+const pipeline = chain([
+  source,
+  transform,
+  sort(/* upstream */, {compare}),
+  consumer
+]);
+```
+
+## Composition with `stream-join`
+
+`stream-sorting` builds on `stream-join`'s primitives but does not re-export them. If a user needs the lower-level merge tools directly:
+
+```js
+const select = require('stream-join/select');
+const sortedInsert = require('stream-join/utils/sorted-insert');
+
+// Hand-rolled k-way merge:
+const merged = select(streams, {
+  pick: items => 0,                      // smallest is always at index 0
+  insert: sortedInsert((a, b) => a < b)
+});
+```
+
+`stream-sorting`'s `mergeSorted` (planned) is the same composition wrapped under a friendlier name.
+
+## See also
+
+- Architecture: `ARCHITECTURE.md`.
+- AI agent rules: `AGENTS.md`.
+- Wiki: <https://github.com/uhop/stream-sorting/wiki>.
+- Sister packages: [`stream-chain`](https://github.com/uhop/stream-chain), [`stream-json`](https://github.com/uhop/stream-json), [`stream-join`](https://github.com/uhop/stream-join), [`stream-fork`](https://github.com/uhop/stream-fork).

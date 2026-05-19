@@ -1,0 +1,62 @@
+<!-- Canonical source: AGENTS.md — keep this file in sync -->
+# stream-sorting — AI Agent Rules
+
+## Project identity
+
+`stream-sorting` is a streaming sort and a suite of operations that consume or produce sorted object-mode Readable streams. Headline op: disk-backed external merge sort (designed for billion-record inputs on a laptop). Built on `stream-chain` (`readableFrom`) and — once it publishes — `stream-join` (`select`, `sortedInsert` — the k-way merge primitives). Part of the `stream-chain` / `stream-json` / `stream-join` family. Scope: anything that **requires or preserves sortedness**.
+
+## Critical rules
+
+- **CommonJS.** The project is `"type": "commonjs"`. Use `require()` in source, `import` in tests (`.mjs`).
+- **No transpilation.** Code runs directly.
+- **One runtime dep today: `stream-chain`.** `stream-join` is added as a second runtime dep once its 2.0.0 publishes (every planned component composes `stream-join`'s `select` + `sortedInsert`). Never add other packages to `dependencies`.
+- **Object mode is always on.** Every output Readable forces `objectMode: true`.
+- **Backpressure must be handled correctly** — yield through `readableFrom`; no buffering above the sort's run-buffer.
+- **Sort is disk-backed by default.** External merge sort writes sorted runs to a temp directory; k-way-merges them on output. In-memory-only and sliding-window-approximate strategies were considered and rejected.
+- **k-way merge reuses `stream-join`.** Compose `select` + `sortedInsert(lessFn)` from `stream-join`; do not reimplement.
+- **Comparator API follows `Array.prototype.sort`.** `(a, b) => number`; negative if `a < b`, positive if `a > b`, zero if equal.
+- **Do not modify or delete test expectations** without understanding why they changed.
+- **Do not add comments or remove comments** unless explicitly asked.
+- **Keep `.js` and `.d.ts` in sync.** Every `.js` carries `// @ts-self-types="./X.d.ts"` at the top; JSDoc lives in the `.d.ts` only.
+- **Helpers under `src/utils/`.** Main components at `src/` root.
+
+## Code style
+
+- Prettier: 100 char width, single quotes, no bracket spacing, no trailing commas, arrow parens "avoid" (see `.prettierrc`).
+- 2-space indentation.
+- Semicolons are enforced by Prettier (default `semi: true`).
+
+## Architecture quick reference
+
+Planned components (in scaffold phase):
+
+- `sort(stream, options)` — disk-backed external merge sort; `compare`, `memoryBudget`, `tmpDir`.
+- `mergeJoin(streamA, streamB, options)` / `joinBy` — SQL-style key join of sorted streams; variants `inner` / `left` / `right` / `full`.
+- `union` / `intersection` / `difference` — set operations on sorted streams.
+- `mergeSorted` — sorted merge without dedup; the suite's foundational op.
+
+## Verification commands
+
+- `npm test` — run the full test suite (parallel workers)
+- `node tests/test-<name>.mjs` — run a single test file directly
+- `npm run test:bun` — run with Bun
+- `npm run test:deno` — run with Deno
+- `npm run ts-check` — TypeScript type checking
+- `npm run js-check` — `tsc --allowJs --checkJs` over the JS sources
+- `npm run lint` — Prettier check
+- `npm run lint:fix` — Prettier write
+
+## File layout
+
+- Entry point: `src/index.js` + `src/index.d.ts`
+- Main components: `src/<name>.js` + `.d.ts` (at `src/` root)
+- Helpers: `src/utils/*.js` + `.d.ts`
+- Tests: `tests/test-*.mjs`, `tests/test-*.cjs`, `tests/test-*.mts`
+- Wiki docs: `wiki/` (git submodule)
+
+## When reading the codebase
+
+- Start with `ARCHITECTURE.md` for the module map.
+- `.d.ts` sidecars are the canonical API reference.
+- The `tests/` files demonstrate every supported usage pattern.
+- Wiki markdown files in `wiki/` contain detailed usage docs.

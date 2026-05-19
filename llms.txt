@@ -1,0 +1,72 @@
+# stream-sorting
+
+External merge sort and sorted-stream operations for object-mode Node `Readable` streams. Part of the `stream-chain` / `stream-json` / `stream-join` family. Scope: anything that **requires or preserves sortedness**.
+
+## Status
+
+Scaffold phase. This file documents the intended public API; components marked **(planned)** are not yet implemented. Track progress in the vault: `projects/stream-sorting/queue.md`.
+
+## Family positioning
+
+- `stream-chain` — pipeline plumbing (`chain`, `readableFrom`).
+- `stream-json` — JSON streaming parser/generator.
+- `stream-join` — N→1 combinators that know nothing about sortedness (`zip`, `select`, `race`, `concat`).
+- `stream-fork` — 1→N split / route / filter.
+- **`stream-sorting`** — sort + sorted-stream operations.
+
+## API (planned)
+
+### `sort(stream, options)` — disk-backed external merge sort
+
+```js
+const sort = require('stream-sorting/sort');
+
+const sorted = sort(input, {
+  compare: (a, b) => a.id - b.id,
+  memoryBudget: 64 * 1024 * 1024,  // optional, soft cap per in-memory run
+  tmpDir: '/tmp',                  // optional, defaults to os.tmpdir()
+  cleanup: true                    // optional, default true
+});
+
+sorted.pipe(downstream);
+```
+
+Comparator semantics: `Array.prototype.sort` style — negative if `a < b`, positive if `a > b`, zero if equal. Output is an object-mode `Readable`.
+
+### `mergeJoin(streamA, streamB, options)` / `joinBy` — SQL-style key join of sorted streams
+
+```js
+const mergeJoin = require('stream-sorting/merge-join');
+
+const joined = mergeJoin(left, right, {
+  keyFn: row => row.id,
+  combine: (a, b) => ({...a, ...b}),
+  variant: 'inner'   // 'inner' | 'left' | 'right' | 'full'
+});
+```
+
+**Pre-condition:** both inputs are sorted by the join key.
+
+### Set operations on sorted streams
+
+- `union(streams, lessFn)` — sorted merge with cross-stream dedup.
+- `intersection(streams, lessFn)` — values in all streams.
+- `difference(streamA, streamsB, lessFn)` — values in `streamA` not in any `streamsB[i]`.
+
+### `mergeSorted(streams, lessFn, options?)` — sorted merge without dedup
+
+The foundational operation: k-way merge of pre-sorted streams.
+
+## Critical rules
+
+- All outputs are object-mode `Readable` streams.
+- Backpressure is preserved end-to-end via `stream-chain`'s `readableFrom`.
+- Runtime deps: `stream-chain` today; `stream-join` added once its 2.0.0 publishes (every component composes its `select` + `sortedInsert`).
+- Comparator API matches `Array.prototype.sort`: `(a, b) => number`.
+- The sort is disk-backed by design — handles inputs larger than memory.
+
+## See also
+
+- Full reference: `llms-full.txt`.
+- Architecture: `ARCHITECTURE.md`.
+- Wiki: <https://github.com/uhop/stream-sorting/wiki>.
