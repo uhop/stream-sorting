@@ -4,7 +4,7 @@ External merge sort and sorted-stream operations for object-mode Node `Readable`
 
 ## Status
 
-Scaffold phase. This file documents the intended public API; components marked **(planned)** are not yet implemented. Track progress in the vault: `projects/stream-sorting/queue.md`.
+Scaffold phase. The wrapper protocol + two built-in wrappers have shipped; the algorithms that compose them are still **(planned)**. Track progress in the vault: `projects/stream-sorting/queue.md`.
 
 ## Family positioning
 
@@ -17,6 +17,20 @@ Scaffold phase. This file documents the intended public API; components marked *
 ## Module system
 
 ESM only (`"type": "module"`). Subpath imports include the `.js` extension because the `exports` map wildcards `"./*": "./src/*"` — Node resolves `'stream-sorting/sort.js'` to `./src/sort.js`.
+
+## Object-stream wrapper protocol (shipped)
+
+Every algorithm operates against the `ObjectStreamWrapper<T>` interface (`src/index.d.ts`): `openWrite() → Writable`, `openRead() → Readable`, `close()`, `delete()`. Mode-exclusive (`idle | writing | reading`); both built-in algorithms write-then-read. Two built-in wrappers ship:
+
+```js
+import {MemoryWrapper, LocalFileWrapper} from 'stream-sorting';
+
+const m = new MemoryWrapper();                                   // array-backed; tests / small data
+const f = new LocalFileWrapper({path: '/var/sort/run-0.jsonl'}); // local FS; JSONL default
+// optional: serialize / deserialize for non-JSON encodings
+```
+
+`LocalFileWrapper`'s `path` is required (no `tmpDir` default — Linux `/tmp` is commonly tmpfs and would defeat the disk-backed sort). Custom wrappers (S3, SSH, sharded volumes) satisfy the interface structurally.
 
 ## API (planned)
 

@@ -4,7 +4,49 @@ External merge sort and sorted-stream operations for object-mode Node `Readable`
 
 ## Status
 
-The package is in scaffold phase as of 2026-05-19. Repo and fleet conventions are in place; components below marked **(planned)** are not yet implemented. The shape captured here is the design target — implementation lands incrementally per `projects/stream-sorting/queue.md` in Eugene's vault.
+The package is in scaffold phase. The wrapper protocol and two built-in wrappers (`MemoryWrapper`, `LocalFileWrapper`) have shipped (see the next section). Components below marked **(planned)** are still unimplemented. The shape captured here is the design target — implementation lands incrementally per `projects/stream-sorting/queue.md` in Eugene's vault.
+
+## Object-stream wrapper protocol (shipped)
+
+Every algorithm in the package operates against `ObjectStreamWrapper<T>`, declared in `src/index.d.ts`:
+
+```ts
+interface ObjectStreamWrapper<T = unknown> {
+  openWrite(): TypedWritable<T>;  // object-mode; re-opens discard previous content
+  openRead(): TypedReadable<T>;   // object-mode; emits items in write order
+  close(): Promise<void>;          // idempotent; releases handles for the current mode
+  delete(): Promise<void>;         // idempotent; removes underlying storage
+}
+```
+
+**Mode-exclusive.** A wrapper is `idle`, `writing`, or `reading` at any moment. `openWrite()` while `writing` re-opens and discards previous content. `openRead()` while `writing` throws — call `close()` first. `openWrite()` while `reading` throws. Both built-in algorithms (`sort`, `polyphase-sort`) write-then-read; they never use both modes concurrently. Custom wrappers MUST honor these rules.
+
+**Built-in wrappers (shipped, zero extra deps):**
+
+```js
+import {MemoryWrapper, LocalFileWrapper} from 'stream-sorting';
+
+// In-memory; for tests, small data, benchmarking the algorithm without disk.
+const m = new MemoryWrapper();
+
+// Local filesystem; JSON-line-delimited by default.
+const f = new LocalFileWrapper({path: '/var/sort/run-0.jsonl'});
+
+// Custom per-item encoding (still line-delimited; result must not contain '\n').
+const fBin = new LocalFileWrapper({
+  path: '/var/sort/run-0.dat',
+  serialize: item => myEncode(item),
+  deserialize: text => myDecode(text)
+});
+```
+
+`LocalFileWrapper`'s `path` is required: there is no default `tmpDir`, because Linux `/tmp` is commonly tmpfs (RAM-backed) and would silently defeat the disk-backed sort. The wrapper exposes its path via the read-only `wrapper.path` getter. Default framing is `JSON.stringify(item) + '\n'` per line; on read, stream-chain's `lines()` + `fixUtf8Stream()` utilities handle UTF-8 reassembly across chunk boundaries and tolerate either trailing-newline or no-trailing-newline files. The framing is compatible with `stream-chain`'s `jsonl/parserStream`.
+
+Custom wrappers for S3, SSH-pipe, sharded volumes, etc., satisfy the interface structurally — see `dev-docs/initial.md` § "Object-stream wrapper protocol" for recipes.
+
+## API reference
+
+### `sort(stream, options)` — external merge sort (planned)
 
 ## Design context
 
@@ -48,10 +90,6 @@ ESM only (`"type": "module"`). Source files use `import` / `export`; tests likew
 import sort from 'stream-sorting/sort.js';        // → ./src/sort.js
 import byKey from 'stream-sorting/utils/by-key.js'; // → ./src/utils/by-key.js
 ```
-
-## API reference
-
-### `sort(stream, options)` — external merge sort (planned)
 
 Sorts an object-mode `Readable` stream of arbitrary cardinality. Returns a new object-mode `Readable` of the same items in `compare` order.
 

@@ -4,7 +4,7 @@
 
 **Node-only.** The package targets server / CLI contexts. The disk-backed sort relies on `node:fs`, `node:os`, `node:path`; there is no web entry point and no browser test surface. Sorting at billion-record scale is a server problem.
 
-The package is currently in scaffold phase — this document captures the intended shape so the conventions are in place from day one. Sections marked **(planned)** describe components not yet implemented.
+The package is currently in scaffold phase. The wrapper protocol and its two built-in implementations have shipped (see below); the algorithms that compose them are still **(planned)**.
 
 ## Project layout
 
@@ -21,6 +21,26 @@ wiki/                         # GitHub wiki documentation (git submodule)
 ```
 
 The split between `src/` root and `src/utils/` is structural: **main components** stay at root; **helpers users compose with main components** go under `utils/`. Same convention as `stream-join`.
+
+## Object-stream wrapper protocol (shipped)
+
+Every algorithm in the package operates against the `ObjectStreamWrapper<T>` interface:
+
+```ts
+interface ObjectStreamWrapper<T = unknown> {
+  openWrite(): TypedWritable<T>; // object-mode; re-opens discard previous content
+  openRead(): TypedReadable<T>; // object-mode; emits items in write order
+  close(): Promise<void>; // idempotent; releases handles for the current mode
+  delete(): Promise<void>; // idempotent; removes underlying storage
+}
+```
+
+Mode-exclusive: a wrapper is `idle`, `writing`, or `reading` at any moment. `openRead()` while writing (and vice versa) throws — call `close()` first. Both algorithms write-then-read, never both at once. The interface is declared in `src/index.d.ts`; user-written wrappers (S3, SSH-pipe, sharded volumes, etc.) satisfy it structurally.
+
+**Built-in wrappers:**
+
+- **`MemoryWrapper`** — array-backed. For tests, small data, and benchmarking the algorithm independently of disk. Re-reads after close replay the same items.
+- **`LocalFileWrapper`** — local-filesystem-backed. Default framing is JSON-line-delimited via stream-chain's `lines()` / `fixUtf8Stream()` utilities (UTF-8-safe across chunk boundaries). `serialize` / `deserialize` options take per-item functions; result must not contain `\n`. **`path` is required** — no default `tmpDir`, because Linux `/tmp` is commonly tmpfs (RAM-backed) and would silently defeat the disk-backed sort. The wrapper exposes the path via the read-only `wrapper.path` getter.
 
 ## Main components (planned)
 
@@ -77,11 +97,14 @@ Helpers compose with the main components. Likely candidates:
 ## Module dependency graph (target)
 
 ```
-src/index.js → src/sort.js, src/merge-join.js, src/union.js, src/intersection.js, src/difference.js, src/merge-sorted.js
+src/index.js → src/memory-wrapper.js     (shipped — array-backed)
+            → src/local-file-wrapper.js  (shipped — local FS, JSONL default)
+            → src/sort.js, src/merge-join.js, src/union.js,
+              src/intersection.js, src/difference.js, src/merge-sorted.js
                         ↓
                    stream-join (select, sortedInsert, pickFirst)
                         ↓
-                   stream-chain (readableFrom)
+                   stream-chain (readableFrom; jsonl utils, gen, asStream)
 ```
 
 Runtime dependencies: `stream-chain` and `stream-join`. The disk-backed sort additionally relies on Node built-ins (`node:fs`, `node:os`, `node:path`, `node:stream`).

@@ -1,5 +1,4 @@
 // @ts-self-types="./index.d.ts"
 
-// Entry point. Scaffold phase — exports are added as components land.
-
-export {};
+export {default as MemoryWrapper} from './memory-wrapper.js';
+export {default as LocalFileWrapper} from './local-file-wrapper.js';

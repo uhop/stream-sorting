@@ -70,7 +70,7 @@ stream-sorting/
 
 ## Architecture quick reference
 
-The package is in early scaffolding. The planned main components are:
+The package is in early scaffolding. **Implemented:** the `ObjectStreamWrapper<T>` protocol (mode-exclusive `idle | writing | reading`; see `src/index.d.ts`) plus two built-in wrappers — `MemoryWrapper` (array-backed; for tests + small data) and `LocalFileWrapper` (local FS, JSONL by default, user-overridable `serialize` / `deserialize`, no default `tmpDir` per the Linux-tmpfs footgun). Planned main components:
 
 - **`sort(stream, options)`** — disk-backed external merge sort. Writes sorted runs to a temp directory (chunk size capped by `memoryBudget`); k-way-merges them on output. Comparator via `compare: (a, b) => number`. Memory budget configurable.
 - **`mergeJoin(streamA, streamB, options)`** / **`joinBy`** — SQL-style key-based join of two sorted streams. Walks both via stream-join's `select` + `sortedInsert(byKey)`; emits combined rows on key match; `null` / skip per variant (`inner` / `left` / `right` / `full`).
