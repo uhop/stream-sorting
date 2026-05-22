@@ -20,14 +20,41 @@ ESM only (`"type": "module"`). Subpath imports include the `.js` extension becau
 
 ## Object-stream wrapper protocol (shipped)
 
-Every algorithm operates against the `ObjectStreamWrapper<T>` interface (`src/index.d.ts`): `openWrite() → Writable`, `openRead() → Readable`, `close()`, `delete()`. Mode-exclusive (`idle | writing | reading`); both built-in algorithms write-then-read. Two built-in wrappers ship:
+Protocol bases + `consume` helper live at `src/wrapper.js`. Every algorithm operates against `ObjectStreamWrapper<T>`. The contract is **runtime-agnostic** (no `node:stream` or Web Streams types):
+
+```ts
+class ItemWriter<T> {
+  write(item): Promise<void>;                 // abstract
+  writeAll(source: AsyncIterable<T> | Iterable<T>): Promise<void>; // default: write loop
+  end(): Promise<void>;                       // abstract; must be idempotent
+  readonly ended: boolean;                    // abstract; flips sync inside end()
+}
+class ObjectStreamWrapper<T> {
+  openWriter(): ItemWriter<T>;
+  openReader(): AsyncIterable<T>;             // iterator.return() handles cleanup
+  close(): Promise<void>;
+  delete(): Promise<void>;
+}
+```
+
+Both are real JS classes — `extends` for `instanceof` + inherited `writeAll`; plain objects matching the shape also work. Mode-exclusive (`idle | writing | reading`); both built-in algorithms write-then-read.
 
 ```js
-import {MemoryWrapper, LocalFileWrapper} from 'stream-sorting';
+import {MemoryWrapper, LocalFileWrapper, consume} from 'stream-sorting';
 
 const m = new MemoryWrapper();                                   // array-backed; tests / small data
 const f = new LocalFileWrapper({path: '/var/sort/run-0.jsonl'}); // local FS; JSONL default
 // optional: serialize / deserialize for non-JSON encodings
+
+// Imperative:
+const w = m.openWriter();
+await w.write(1); await w.writeAll([2, 3]); await w.end();
+
+// Or one-shot via consume():
+await consume(m.openWriter(), [1, 2, 3]);
+
+// Read with for-await; iterator.return() cleans up on break.
+for await (const item of m.openReader()) console.log(item);
 ```
 
 `LocalFileWrapper`'s `path` is required (no `tmpDir` default — Linux `/tmp` is commonly tmpfs and would defeat the disk-backed sort). Custom wrappers (S3, SSH, sharded volumes) satisfy the interface structurally.

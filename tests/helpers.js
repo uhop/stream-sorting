@@ -35,3 +35,9 @@ export const streamToArrayOnce = stream =>
     stream.on('end', () => resolve(output));
     stream.on('error', reject);
   });
+
+export const collect = async iterable => {
+  const out = [];
+  for await (const item of iterable) out.push(item);
+  return out;
+};

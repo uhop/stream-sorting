@@ -24,23 +24,36 @@ The split between `src/` root and `src/utils/` is structural: **main components*
 
 ## Object-stream wrapper protocol (shipped)
 
-Every algorithm in the package operates against the `ObjectStreamWrapper<T>` interface:
+The wrapper protocol — interface, base classes, and the `consume` helper — lives at `src/wrapper.js`. Every algorithm in the package operates against `ObjectStreamWrapper<T>`. The contract is **runtime-agnostic** — no `node:stream` or Web Streams types appear — so wrappers can use whatever internal mechanism best fits their backing store (Node FS streams for local files, AWS SDK for S3, async generators for arrays, Web Streams if benchmarks show them faster):
 
 ```ts
-interface ObjectStreamWrapper<T = unknown> {
-  openWrite(): TypedWritable<T>; // object-mode; re-opens discard previous content
-  openRead(): TypedReadable<T>; // object-mode; emits items in write order
-  close(): Promise<void>; // idempotent; releases handles for the current mode
+class ItemWriter<T> {
+  write(item: T): Promise<void>; // backpressure-aware (abstract)
+  writeAll(source: AsyncIterable<T> | Iterable<T>): Promise<void>; // default: write loop
+  end(): Promise<void>; // idempotent (abstract)
+  readonly ended: boolean; // flips sync inside end() (abstract)
+}
+
+class ObjectStreamWrapper<T = unknown> {
+  openWriter(): ItemWriter<T>;
+  openReader(): AsyncIterable<T>; // iterator.return() releases per-read resources
+  close(): Promise<void>; // coarse-grained: abandon current mode
   delete(): Promise<void>; // idempotent; removes underlying storage
 }
 ```
 
-Mode-exclusive: a wrapper is `idle`, `writing`, or `reading` at any moment. `openRead()` while writing (and vice versa) throws — call `close()` first. Both algorithms write-then-read, never both at once. The interface is declared in `src/index.d.ts`; user-written wrappers (S3, SSH-pipe, sharded volumes, etc.) satisfy it structurally.
+Both are real JS classes — subclass them for `instanceof` checks and to inherit `ItemWriter.writeAll`'s default loop (subclasses override `writeAll` only if storage offers a smarter bulk path). Plain objects matching the shape also work (structural typing).
+
+**Mode-exclusive.** A wrapper is `idle`, `writing`, or `reading` at any moment. `openWriter()` while reading throws (and vice versa); call `close()` first. Both built-in algorithms write-then-read, never both at once.
+
+**Cleanup via `return()`.** The iterator returned from `openReader()[Symbol.asyncIterator]()` implements `return()`, so resources are released automatically when the consumer `break`s from `for await` or an exception unwinds the loop. The wrapper-level `wrapper.close()` is the coarse-grained escape hatch — useful when a session is abandoned without iterating, or as defensive cleanup before `delete()`.
 
 **Built-in wrappers:**
 
-- **`MemoryWrapper`** — array-backed. For tests, small data, and benchmarking the algorithm independently of disk. Re-reads after close replay the same items.
-- **`LocalFileWrapper`** — local-filesystem-backed. Default framing is JSON-line-delimited via stream-chain's `lines()` / `fixUtf8Stream()` utilities (UTF-8-safe across chunk boundaries). `serialize` / `deserialize` options take per-item functions; result must not contain `\n`. **`path` is required** — no default `tmpDir`, because Linux `/tmp` is commonly tmpfs (RAM-backed) and would silently defeat the disk-backed sort. The wrapper exposes the path via the read-only `wrapper.path` getter.
+- **`MemoryWrapper`** — array-backed. For tests, small data, and benchmarking the algorithm independently of disk. Re-reads after a closed session replay the same items.
+- **`LocalFileWrapper`** — local-filesystem-backed. Default framing is JSON-line-delimited; the read path uses stream-chain's `gen(fixUtf8Stream(), lines(), deserialize)` (UTF-8-safe across chunk boundaries; compatible with stream-chain's `jsonl/parserStream`). `serialize` / `deserialize` options take per-item functions; result must not contain `\n`. **`path` is required** — no default `tmpDir`, because Linux `/tmp` is commonly tmpfs (RAM-backed) and would silently defeat the disk-backed sort.
+
+**`consume(writer, source)` helper** (at `src/wrapper.js`, alongside the bases): one-shot convenience equivalent to `await writer.writeAll(source); await writer.end();`. Use when you have all the items in hand and don't need imperative control over per-item writes.
 
 ## Main components (planned)
 
@@ -97,8 +110,9 @@ Helpers compose with the main components. Likely candidates:
 ## Module dependency graph (target)
 
 ```
-src/index.js → src/memory-wrapper.js     (shipped — array-backed)
-            → src/local-file-wrapper.js  (shipped — local FS, JSONL default)
+src/index.js → src/wrapper.js             (shipped — protocol bases + consume)
+            → src/memory-wrapper.js       (shipped — array-backed)
+            → src/local-file-wrapper.js   (shipped — local FS, JSONL default)
             → src/sort.js, src/merge-join.js, src/union.js,
               src/intersection.js, src/difference.js, src/merge-sorted.js
                         ↓

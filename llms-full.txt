@@ -8,18 +8,46 @@ The package is in scaffold phase. The wrapper protocol and two built-in wrappers
 
 ## Object-stream wrapper protocol (shipped)
 
-Every algorithm in the package operates against `ObjectStreamWrapper<T>`, declared in `src/index.d.ts`:
+The wrapper protocol — base classes, helper, and contract docs — lives at `src/wrapper.js`. Every algorithm in the package operates against `ObjectStreamWrapper<T>`. The contract is **runtime-agnostic** — no `node:stream` or Web Streams types appear — so each wrapper picks its own internal mechanism (Node FS streams, AWS SDK, async generators, Web Streams, etc.) without changing the algorithm:
 
 ```ts
-interface ObjectStreamWrapper<T = unknown> {
-  openWrite(): TypedWritable<T>;  // object-mode; re-opens discard previous content
-  openRead(): TypedReadable<T>;   // object-mode; emits items in write order
-  close(): Promise<void>;          // idempotent; releases handles for the current mode
-  delete(): Promise<void>;         // idempotent; removes underlying storage
+class ItemWriter<T = unknown> {
+  // Backpressure-aware: resolves when the item has been accepted by storage.
+  write(item: T): Promise<void>;                                  // abstract
+  // Drain an iterable; awaits each write so the source pulls at the writer's pace.
+  // Does NOT call end() — compose the two explicitly, or use consume().
+  // Base implementation: serialized loop that calls write(item); override only if
+  // the storage offers a smarter bulk path (e.g., a single backend call).
+  writeAll(source: AsyncIterable<T> | Iterable<T>): Promise<void>;
+  // MUST be idempotent: second and later calls return the same promise as the first.
+  end(): Promise<void>;                                            // abstract
+  // MUST flip to true synchronously inside the first end() call.
+  readonly ended: boolean;                                         // abstract
+}
+
+class ObjectStreamWrapper<T = unknown> {
+  openWriter(): ItemWriter<T>;
+  openReader(): AsyncIterable<T>;
+  close(): Promise<void>;   // coarse-grained: abandon current mode
+  delete(): Promise<void>;  // idempotent; removes underlying storage
 }
 ```
 
-**Mode-exclusive.** A wrapper is `idle`, `writing`, or `reading` at any moment. `openWrite()` while `writing` re-opens and discards previous content. `openRead()` while `writing` throws — call `close()` first. `openWrite()` while `reading` throws. Both built-in algorithms (`sort`, `polyphase-sort`) write-then-read; they never use both modes concurrently. Custom wrappers MUST honor these rules.
+Both are real JS classes. `extends ItemWriter` gives subclasses the default `writeAll` loop (and `instanceof` works for runtime checks); `extends ObjectStreamWrapper` is a marker that documents intent. Plain objects matching the shape also satisfy the contract — TypeScript accepts either, JavaScript runs either.
+
+**Mode-exclusive.** A wrapper is `idle`, `writing`, or `reading` at any moment. `openWriter()` while writing re-opens and discards previous content. `openReader()` while writing throws — call `close()` first. `openWriter()` while reading throws. Both built-in algorithms (`sort`, `polyphase-sort`) write-then-read; they never use both modes concurrently. Custom wrappers MUST honor these rules.
+
+**Cleanup via `return()`.** The iterator returned from `openReader()[Symbol.asyncIterator]()` implements `return()`. `for await ... break`, thrown exceptions in the loop body, and explicit `iterator.return()` all release per-read resources automatically — no manual close needed. `wrapper.close()` is the coarse-grained escape hatch for sessions abandoned without iterating, or as defensive cleanup before `delete()`.
+
+**`consume(writer, source)` helper.** Lives in `src/wrapper.js` alongside the bases. One-shot convenience equivalent to `await writer.writeAll(source); await writer.end();`. Use when you have all items in hand:
+
+```js
+import {MemoryWrapper, consume} from 'stream-sorting';
+
+const m = new MemoryWrapper();
+await consume(m.openWriter(), [1, 2, 3, 4, 5]);
+for await (const item of m.openReader()) console.log(item);
+```
 
 **Built-in wrappers (shipped, zero extra deps):**
 
@@ -38,9 +66,15 @@ const fBin = new LocalFileWrapper({
   serialize: item => myEncode(item),
   deserialize: text => myDecode(text)
 });
+
+// Imperative writer:
+const w = f.openWriter();
+await w.write({id: 1});
+await w.writeAll([{id: 2}, {id: 3}]);
+await w.end();
 ```
 
-`LocalFileWrapper`'s `path` is required: there is no default `tmpDir`, because Linux `/tmp` is commonly tmpfs (RAM-backed) and would silently defeat the disk-backed sort. The wrapper exposes its path via the read-only `wrapper.path` getter. Default framing is `JSON.stringify(item) + '\n'` per line; on read, stream-chain's `lines()` + `fixUtf8Stream()` utilities handle UTF-8 reassembly across chunk boundaries and tolerate either trailing-newline or no-trailing-newline files. The framing is compatible with `stream-chain`'s `jsonl/parserStream`.
+`LocalFileWrapper`'s `path` is required: there is no default `tmpDir`, because Linux `/tmp` is commonly tmpfs (RAM-backed) and would silently defeat the disk-backed sort. The wrapper exposes its path via the read-only `wrapper.path` getter. Default framing is `JSON.stringify(item) + '\n'` per line; on read, stream-chain's `gen(fixUtf8Stream(), lines(), deserialize)` pipeline handles UTF-8 reassembly across chunk boundaries and tolerates either trailing-newline or no-trailing-newline files. The framing is compatible with `stream-chain`'s `jsonl/parserStream`.
 
 Custom wrappers for S3, SSH-pipe, sharded volumes, etc., satisfy the interface structurally — see `dev-docs/initial.md` § "Object-stream wrapper protocol" for recipes.
 

@@ -2,12 +2,13 @@
 
 import {createReadStream, createWriteStream} from 'node:fs';
 import {unlink} from 'node:fs/promises';
-import {Transform} from 'node:stream';
 
 import asStream from 'stream-chain/asStream.js';
 import gen from 'stream-chain/gen.js';
 import fixUtf8Stream from 'stream-chain/utils/fixUtf8Stream.js';
 import lines from 'stream-chain/utils/lines.js';
+
+import {ItemWriter, ObjectStreamWrapper} from './wrapper.js';
 
 const MODE_IDLE = 'idle';
 const MODE_WRITING = 'writing';
@@ -16,8 +17,84 @@ const MODE_READING = 'reading';
 const defaultSerialize = item => JSON.stringify(item);
 const defaultDeserialize = text => JSON.parse(text);
 
-class LocalFileWrapper {
+const writeAfterEnd = () => new Error('LocalFileWriter: write() after end()');
+
+class LocalFileWriter extends ItemWriter {
+  constructor(wrapper, fileStream) {
+    super();
+    this._wrapper = wrapper;
+    this._fileStream = fileStream;
+    this._ended = false;
+    this._endPromise = null;
+    this._pendingError = null;
+    fileStream.on('error', err => {
+      this._pendingError = this._pendingError || err;
+    });
+  }
+
+  get ended() {
+    return this._ended;
+  }
+
+  _writeChunk(chunk) {
+    const fileStream = this._fileStream;
+    if (this._pendingError) return Promise.reject(this._pendingError);
+    const ok = fileStream.write(chunk);
+    if (ok) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const onDrain = () => {
+        fileStream.removeListener('error', onError);
+        resolve();
+      };
+      const onError = err => {
+        fileStream.removeListener('drain', onDrain);
+        reject(err);
+      };
+      fileStream.once('drain', onDrain);
+      fileStream.once('error', onError);
+    });
+  }
+
+  async write(item) {
+    if (this._ended) throw writeAfterEnd();
+    await this._writeChunk(this._wrapper._serialize(item) + '\n');
+  }
+
+  end() {
+    if (!this._ended) {
+      this._ended = true;
+      const fileStream = this._fileStream;
+      const wrapper = this._wrapper;
+      const self = this;
+      this._endPromise = new Promise((resolve, reject) => {
+        const settle = err => {
+          if (wrapper._writer === self) {
+            wrapper._mode = MODE_IDLE;
+            wrapper._writer = null;
+          }
+          if (err) reject(err);
+          else resolve();
+        };
+        const onFinish = () => {
+          fileStream.removeListener('error', onError);
+          settle();
+        };
+        const onError = err => {
+          fileStream.removeListener('finish', onFinish);
+          settle(err);
+        };
+        fileStream.once('finish', onFinish);
+        fileStream.once('error', onError);
+        fileStream.end();
+      });
+    }
+    return this._endPromise;
+  }
+}
+
+class LocalFileWrapper extends ObjectStreamWrapper {
   constructor(options) {
+    super();
     if (!options || typeof options.path !== 'string' || !options.path) {
       throw new TypeError(
         'LocalFileWrapper: options.path is required (no default — Linux /tmp is commonly tmpfs and would defeat the disk-backed sort)'
@@ -27,44 +104,30 @@ class LocalFileWrapper {
     this._serialize = options.serialize || defaultSerialize;
     this._deserialize = options.deserialize || defaultDeserialize;
     this._mode = MODE_IDLE;
-    this._fileStream = null;
-    this._userStream = null;
+    this._writer = null;
+    this._reader = null;
   }
 
   get path() {
     return this._path;
   }
 
-  openWrite() {
+  openWriter() {
     if (this._mode === MODE_READING) {
-      throw new Error('LocalFileWrapper: cannot openWrite() while reading; call close() first');
+      throw new Error('LocalFileWrapper: cannot openWriter() while reading; call close() first');
     }
-    const serialize = this._serialize;
-    const encoder = new Transform({
-      writableObjectMode: true,
-      readableObjectMode: false,
-      transform(chunk, _enc, cb) {
-        try {
-          this.push(serialize(chunk) + '\n');
-          cb(null);
-        } catch (err) {
-          cb(err);
-        }
-      }
-    });
     const fileStream = createWriteStream(this._path);
-    encoder.pipe(fileStream);
-    fileStream.on('error', err => encoder.destroy(err));
-    this._fileStream = fileStream;
-    this._userStream = encoder;
+    this._writer = new LocalFileWriter(this, fileStream);
     this._mode = MODE_WRITING;
-    return encoder;
+    return this._writer;
   }
 
-  openRead() {
+  openReader() {
     if (this._mode === MODE_WRITING) {
-      throw new Error('LocalFileWrapper: cannot openRead() while writing; call close() first');
+      throw new Error('LocalFileWrapper: cannot openReader() while writing; call close() first');
     }
+    if (this._reader) this._reader.dispose();
+
     const deserialize = this._deserialize;
     const parser = asStream(
       gen(fixUtf8Stream(), lines(), text => deserialize(text)),
@@ -76,32 +139,60 @@ class LocalFileWrapper {
     const fileStream = createReadStream(this._path);
     fileStream.pipe(parser);
     fileStream.on('error', err => parser.destroy(err));
-    this._fileStream = fileStream;
-    this._userStream = parser;
+
+    const wrapper = this;
+    let done = false;
+
+    const finalize = () => {
+      if (done) return;
+      done = true;
+      if (!parser.destroyed) parser.destroy();
+      if (!fileStream.destroyed) fileStream.destroy();
+      if (wrapper._reader === reader) {
+        wrapper._mode = MODE_IDLE;
+        wrapper._reader = null;
+      }
+    };
+
+    const reader = {
+      dispose: finalize,
+      [Symbol.asyncIterator]() {
+        const inner = parser[Symbol.asyncIterator]();
+        return {
+          async next() {
+            const r = await inner.next();
+            if (r.done) finalize();
+            return r;
+          },
+          async return(value) {
+            try {
+              if (inner.return) await inner.return();
+            } finally {
+              finalize();
+            }
+            return {value, done: true};
+          }
+        };
+      }
+    };
+
+    this._reader = reader;
     this._mode = MODE_READING;
-    return parser;
+    return reader;
   }
 
   async close() {
-    const fileStream = this._fileStream;
-    const userStream = this._userStream;
-    const mode = this._mode;
-    this._mode = MODE_IDLE;
-    this._fileStream = null;
-    this._userStream = null;
-    if (mode === MODE_WRITING) {
-      if (userStream && !userStream.writableEnded) userStream.end();
-      const writeFile = /** @type {import('node:fs').WriteStream | null} */ (fileStream);
-      if (writeFile && !writeFile.writableFinished) {
-        await new Promise((resolve, reject) => {
-          writeFile.once('finish', resolve);
-          writeFile.once('error', reject);
-        });
+    if (this._mode === MODE_WRITING && this._writer && !this._writer.ended) {
+      try {
+        await this._writer.end();
+      } catch (_) {
+        // close() is a cleanup path; swallow flush errors.
       }
-    } else if (mode === MODE_READING) {
-      if (fileStream && !fileStream.destroyed) fileStream.destroy();
-      if (userStream && !userStream.destroyed) userStream.destroy();
     }
+    if (this._mode === MODE_READING && this._reader) this._reader.dispose();
+    this._mode = MODE_IDLE;
+    this._writer = null;
+    this._reader = null;
   }
 
   async delete() {
