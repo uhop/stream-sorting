@@ -2,7 +2,7 @@
   "name": "stream-sorting",
   "version": "0.0.0",
   "description": "External merge sort and sorted-stream operations (mergeJoin, union, intersection, difference) for object-mode Node Readable streams. Part of the stream-chain / stream-json / stream-join family.",
-  "type": "commonjs",
+  "type": "module",
   "main": "./src/index.js",
   "types": "./src/index.d.ts",
   "exports": {
@@ -18,9 +18,9 @@
     "test:deno": "tape6-deno --flags FO",
     "ts-check": "tsc --noEmit",
     "js-check": "tsc --project tsconfig.check.json",
-    "ts-test": "tape6 --flags FO 'tests/test-*.*ts'",
-    "ts-test:bun": "tape6-bun --flags FO 'tests/test-*.*ts'",
-    "ts-test:deno": "tape6-deno --flags FO 'tests/test-*.*ts'",
+    "ts-test": "tape6 --flags FO 'tests/test-*.ts'",
+    "ts-test:bun": "tape6-bun --flags FO 'tests/test-*.ts'",
+    "ts-test:deno": "tape6-deno --flags FO 'tests/test-*.ts'",
     "lint": "prettier --check .",
     "lint:fix": "prettier --write ."
   },
@@ -61,14 +61,15 @@
   ],
   "tape6": {
     "tests": [
-      "/tests/test-*.*js"
+      "/tests/test-*.js"
     ]
   },
   "dependencies": {
-    "stream-chain": "^3.6.3"
+    "stream-chain": "^4.0.2",
+    "stream-join": "^2.0.0"
   },
   "devDependencies": {
-    "@types/node": "^25.7.0",
+    "@types/node": "^25.9.1",
     "prettier": "^3.8.3",
     "tape-six": "^1.9.0",
     "typescript": "^6.0.3"

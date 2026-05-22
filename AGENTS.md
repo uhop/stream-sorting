@@ -1,6 +1,6 @@
 # AGENTS.md — stream-sorting
 
-> `stream-sorting` is a streaming sort and a suite of operations that consume or produce sorted object-mode Readable streams. Scope: anything that **requires or preserves sortedness**. The headline operation is a disk-backed external merge sort designed to sort a billion records on a laptop without OOMing. Built on top of [`stream-chain`](https://www.npmjs.com/package/stream-chain) (for `readableFrom`) and — once it publishes — [`stream-join`](https://github.com/uhop/stream-join) (for `select` + `sortedInsert`, the k-way merge primitives). Part of the `stream-chain` / `stream-json` / `stream-join` family.
+> `stream-sorting` is a streaming sort and a suite of operations that consume or produce sorted object-mode Readable streams. Scope: anything that **requires or preserves sortedness**. The headline operation is a disk-backed external merge sort designed to sort a billion records on a laptop without OOMing. Built on [`stream-chain`](https://www.npmjs.com/package/stream-chain) (for `readableFrom`) and [`stream-join`](https://www.npmjs.com/package/stream-join) (for `select` + `sortedInsert`, the k-way merge primitives). Part of the `stream-chain` / `stream-json` / `stream-join` family. **Node-only** — the package targets server / CLI contexts; browsers are out of scope.
 
 For project structure, module dependencies, and the architecture overview see [ARCHITECTURE.md](./ARCHITECTURE.md).
 For detailed usage docs and API references see the [wiki](https://github.com/uhop/stream-sorting/wiki).
@@ -21,7 +21,7 @@ npm install
 - **Test:** `npm test` (runs `tape6 --flags FO`)
 - **Test (Bun):** `npm run test:bun`
 - **Test (Deno):** `npm run test:deno`
-- **Test (single file):** `node tests/test-<name>.mjs`
+- **Test (single file):** `node tests/test-<name>.js`
 - **TypeScript check:** `npm run ts-check`
 - **JavaScript check (tsc --checkJs):** `npm run js-check`
 - **TypeScript tests:** `npm run ts-test`
@@ -37,7 +37,7 @@ stream-sorting/
 │   ├── index.js              # Entry point
 │   ├── index.d.ts
 │   └── utils/                # Helpers users compose with main components
-├── tests/                    # Test files (test-*.mjs, test-*.cjs, test-*.mts, using tape-six)
+├── tests/                    # Test files (test-*.js using tape-six) + helpers.js
 ├── dev-docs/                 # Internal design notes (not in the published tarball)
 ├── wiki/                     # GitHub wiki documentation (git submodule)
 └── .github/                  # CI workflows, Dependabot config
@@ -47,17 +47,17 @@ stream-sorting/
 
 ## Code style
 
-- **CommonJS** throughout (`"type": "commonjs"` in package.json).
+- **ESM throughout** (`"type": "module"` in package.json). Use `import` / `export`; no `require()` / `module.exports`.
 - **No transpilation** — code runs directly.
 - **Lambda-style functions** for stand-alone definitions that don't use `this` (`const fn = (...) => …`); `function` declarations only for generators (`function*`) and the rare `this`-dependent case.
 - **Prettier** for formatting (see `.prettierrc`): 100 char width, single quotes, no bracket spacing, no trailing commas, arrow parens "avoid".
 - 2-space indentation.
 - Semicolons are enforced by Prettier (default `semi: true`).
-- Imports use `require()` syntax in source, `import` in tests (`.mjs`).
 
 ## Critical rules
 
-- **One runtime dependency today: `stream-chain`** (provides `readableFrom`, async-iterable → Readable conversion). **`stream-join` will be added as a second runtime dep once its 2.0.0 publishes** — every planned component composes `stream-join`'s `select` + `sortedInsert` rather than reimplementing the k-way merge primitives, so most components stay unimplemented until that dep is available. When stream-join 2.0.0 ships, add it to `dependencies` as `^2.0.0`. Never add other packages to `dependencies`; only `devDependencies` are otherwise allowed.
+- **Two runtime dependencies: `stream-chain` and `stream-join`.** `stream-chain` provides `readableFrom` (async-iterable → Readable). `stream-join` provides `select` + `sortedInsert` (the k-way merge primitives every planned component composes). Never add other packages to `dependencies`; only `devDependencies` are otherwise allowed.
+- **Node-only.** The package targets Node servers and CLIs. The disk-backed sort relies on `node:fs`, `node:os`, `node:path`. No web entry point; no browser tests.
 - **Object mode is always on.** Every main component forces `objectMode: true` on its output Readable regardless of caller options.
 - **Backpressure must be handled correctly.** Yield through `readableFrom` which respects downstream demand. Do not add buffering on top of input streams beyond the sort's run-buffer.
 - **Sort is disk-backed by default.** The external-merge-sort engine writes sorted runs to on-disk files (chunk size capped by a configurable in-memory budget), then k-way-merges them. The design point is "sort a billion records on a laptop without OOMing"; in-memory-only and sliding-window-approximate strategies were considered and rejected during design.
@@ -84,7 +84,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module map and dependency 
 ## Verification commands
 
 - `npm test` — run the full test suite (parallel workers)
-- `node tests/test-<name>.mjs` — run a single test file directly
+- `node tests/test-<name>.js` — run a single test file directly
 - `npm run test:bun` — run with Bun
 - `npm run test:deno` — run with Deno
 - `npm run ts-check` — TypeScript type checking
@@ -98,7 +98,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module map and dependency 
 - Entry point: `src/index.js` + `src/index.d.ts`.
 - Main components: TBD as the package is built out — one `.js` + `.d.ts` pair per public component at `src/` root.
 - Helpers: `src/utils/*.js` (each with its `.d.ts`).
-- Tests: `tests/test-*.mjs`, `tests/test-*.cjs`, `tests/test-*.mts`.
+- Tests: `tests/test-*.js` (ESM), plus `tests/helpers.js` for shared stream test utilities.
 - Design notes: `dev-docs/*.md` (internal; not in the published tarball).
 - Wiki docs: `wiki/` (git submodule).
 

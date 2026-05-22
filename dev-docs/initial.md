@@ -18,7 +18,7 @@ Sort huge object streams. Two algorithms shipped side-by-side: a straight k-way 
 
 - In-memory-only sort. That's `(await stream.toArray()).sort(compare)`, one line of user code.
 - Resumability. Polyphase has natural pass-boundary save points; we'll design the wrapper protocol to accommodate it later but not implement in v1. K-way is harder; probably never.
-- Parallel/distributed sort coordination. The *storage* can be distributed (via custom wrappers); the *compute* is single-process.
+- Parallel/distributed sort coordination. The _storage_ can be distributed (via custom wrappers); the _compute_ is single-process.
 - Web Streams as first-class input/output. Convert at the boundaries.
 
 ## Two algorithms
@@ -56,10 +56,10 @@ The wrapper is the core abstraction. It ferries objects to and from some backing
 ```ts
 interface ObjectStreamWrapper {
   // Returns a Writable that consumes objects. Discards any previous content.
-  openWrite(): Writable;          // object-mode
+  openWrite(): Writable; // object-mode
 
   // Returns a Readable that produces previously-written objects in order.
-  openRead(): Readable;           // object-mode
+  openRead(): Readable; // object-mode
 
   // Releases handles for the current mode.
   close(): Promise<void>;
@@ -97,9 +97,10 @@ The point: the algorithm doesn't care. As long as the wrapper conforms to the pr
 
 Algorithm core works with Node object-mode `Readable` / `Writable` streams.
 
-**Internally we pull from input streams via an event-based puller, not `[Symbol.asyncIterator]()`.** Node's async-iterator support on Readable streams is officially marked experimental and has known issues: it wraps original `'error'` values in `AbortError`, behavior shifts across minor releases, and we cannot rely on it in production. This is the same call `stream-join` made — see its `src/stream-puller.js`.
+**Internally we pull from input streams via an event-based puller, not `[Symbol.asyncIterator]()`.** Node's async-iterator support on Readable streams is officially marked experimental and has known issues: it wraps original `'error'` values in `AbortError`, behavior shifts across minor releases, and we cannot rely on it in production. This is the same call `stream-join` made — see its `src/stream-puller.js` (and the open D11 proposal to promote that primitive to `stream-chain`).
 
 The puller has shape `{next, close}`:
+
 - `next()` returns `Promise<{value, done}>`, resolving with the next chunk or signalling end.
 - Rejects with the **original** error value (no `AbortError` wrapper).
 - `close()` releases listeners; idempotent.
@@ -122,8 +123,8 @@ This keeps the core simple and the family's surface coherent.
 ## API sketch
 
 ```js
-const sort = require('stream-sorting/sort');
-const polyphaseSort = require('stream-sorting/polyphase-sort');
+import sort from 'stream-sorting/sort.js';
+import polyphaseSort from 'stream-sorting/polyphase-sort.js';
 
 // k-way (simple case — built-in LocalFileWrapper with explicit tmpDir)
 const sorted = sort(input, {
@@ -175,26 +176,27 @@ The algorithm is object-mode in / object-mode out (matches the family convention
 // Sort JSONL output of a shell pipeline.
 // `dollar-shell` produces text streams (stdout). `stream-chain` handles the
 // text-JSONL ↔ objects conversion on both sides of sort.
-const $ = require('dollar-shell');
-const chain = require('stream-chain');
-const {jsonlParse, jsonlStringify} = require('stream-chain'); // (whichever the exact names are)
+import $ from 'dollar-shell';
+import chain from 'stream-chain';
+import {jsonlParse, jsonlStringify} from 'stream-chain/jsonl/index.js'; // (whichever the exact path is)
 
 const upstream = chain([
-  $`tail -F /var/log/big.log | jq -c .`.stream(),  // text JSONL
-  jsonlParse()                                      // → objects
+  $`tail -F /var/log/big.log | jq -c .`.stream(), // text JSONL
+  jsonlParse() // → objects
 ]);
 const sorted = sort(upstream, {
   compare: (a, b) => a.timestamp - b.timestamp,
   batchSize: 50000,
   tmpDir: '/var/sort'
 });
-sorted.pipe(jsonlStringify()).pipe(fileOrStdout);   // back to text JSONL
+sorted.pipe(jsonlStringify()).pipe(fileOrStdout); // back to text JSONL
 
 // Sort a multi-GB on-disk JSONL file.
-const sorted = sort(
-  chain([fs.createReadStream('huge.jsonl'), jsonlParse()]),
-  {compare, batchSize: 10000, tmpDir: '/var/sort'}
-);
+const sorted = sort(chain([fs.createReadStream('huge.jsonl'), jsonlParse()]), {
+  compare,
+  batchSize: 10000,
+  tmpDir: '/var/sort'
+});
 
 // Sort across machines: K=3 wrappers, one per remote disk over SSH.
 const sorted = polyphaseSort(input, {
@@ -212,6 +214,7 @@ Any object-mode Readable works as input: `dollar-shell` pipelines (with the JSON
 Use `Array.prototype.sort(compare)`. V8's TimSort is stable, adaptive (O(n) on already-sorted input), and C++-optimized. Beating it from JS is hopeless.
 
 Pre-sort flow:
+
 1. Pull items via the puller into an in-memory array up to `batchSize`.
 2. Call `array.sort(compare)`.
 3. Open a fresh wrapper in write mode, write all items, close it.
@@ -227,6 +230,7 @@ For `sort`: each run gets its own fresh wrapper (created via `createWrapper`).
 `stable: true` (the default) costs ~8 bytes per item on disk (a monotonic sequence tag) and one tiebreak comparison per merge step.
 
 The tag:
+
 - Assigned during input pull, monotonically increasing per call.
 - Persisted with each item to the wrapper's underlying storage.
 - Used as a tiebreaker during merge: when the user's comparator returns 0, the smaller tag wins.
@@ -251,8 +255,7 @@ Two opportunities shipped in v1:
 1. **Pre-sort overlap.** Read batch N+1 while sorting and writing batch N. Async overlap; no threads. Easy win.
 2. **Merge-time read parallelism.** Multiple input streams read concurrently for free — Node streams overlap I/O naturally. The merge heap step serializes (single-threaded by definition), but I/O interleaves behind it. No code needed; just don't accidentally serialize the reads.
 
-Deferred:
-3. Polyphase phase overlap. Each phase reads K-1 and writes 1; phases are sequential by definition. Within a phase, (2) applies. Across phases, no overlap available without rethinking the algorithm.
+Deferred: 3. Polyphase phase overlap. Each phase reads K-1 and writes 1; phases are sequential by definition. Within a phase, (2) applies. Across phases, no overlap available without rethinking the algorithm.
 
 ## Progress reporting
 
@@ -265,13 +268,13 @@ interface ProgressStats {
   phase: 'pre-sort' | 'merge' | 'final-merge';
   itemsRead: number;
   itemsWritten: number;
-  runsCreated?: number;        // k-way only
-  passesComplete?: number;     // polyphase only
-  passesTotal?: number;        // polyphase only — estimated, not exact
-  virtualSeries?: number;      // polyphase only
+  runsCreated?: number; // k-way only
+  passesComplete?: number; // polyphase only
+  passesTotal?: number; // polyphase only — estimated, not exact
+  virtualSeries?: number; // polyphase only
   files: Array<{
     role: 'input' | 'output' | 'idle';
-    seriesRemaining?: number;  // polyphase
+    seriesRemaining?: number; // polyphase
     itemsRemaining?: number;
   }>;
 }
@@ -282,6 +285,7 @@ Callback fires on natural event boundaries (run-complete during pre-sort, pass-c
 ## Errors and cleanup
 
 The algorithm throws on:
+
 - Comparator throws.
 - Input stream emits `'error'`.
 - Any wrapper operation fails (open / read / write / close / delete).
@@ -289,6 +293,7 @@ The algorithm throws on:
 Errors carry `cause` so the original error value is preserved end-to-end (no `AbortError` wrapping, per the family convention).
 
 Cleanup contract:
+
 - A `finally` block calls `wrapper.delete()` on every algorithm-owned wrapper, and `wrapper.close()` on every user-passed wrapper.
 - Wrapper-cleanup errors during the `finally` are swallowed (don't mask the original error).
 - `keepTempFiles: true` in options opts out of cleanup for debugging.
@@ -296,12 +301,14 @@ Cleanup contract:
 ## Resumability — out of scope for v1
 
 Polyphase has natural pass-boundary save points:
+
 - After each phase, state is "file-i contains M_i runs, current output is file-j."
 - Serializable as a small JSON sidecar associated with the wrapper-set.
 - To resume: load sidecar, re-attach to existing wrappers in read mode for completed passes, continue.
 - Wrapper protocol addition needed: an "attach to existing content without truncation" mode. Not in v1, but the protocol should leave room for it (don't bake "openWrite always truncates" into the contract more deeply than needed).
 
 K-way has one easy save point: between "all runs written" and "merge starts."
+
 - Save list of run wrappers + sizes.
 - Resume: open all wrappers, run the merge.
 - Mid-merge resume: hard (heap state, per-source positions). Probably never.

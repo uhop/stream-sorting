@@ -3,13 +3,14 @@
 
 ## Project identity
 
-`stream-sorting` is a streaming sort and a suite of operations that consume or produce sorted object-mode Readable streams. Headline op: disk-backed external merge sort (designed for billion-record inputs on a laptop). Built on `stream-chain` (`readableFrom`) and — once it publishes — `stream-join` (`select`, `sortedInsert` — the k-way merge primitives). Part of the `stream-chain` / `stream-json` / `stream-join` family. Scope: anything that **requires or preserves sortedness**.
+`stream-sorting` is a streaming sort and a suite of operations that consume or produce sorted object-mode Readable streams. Headline op: disk-backed external merge sort (designed for billion-record inputs on a laptop). Built on `stream-chain` (`readableFrom`) and `stream-join` (`select`, `sortedInsert` — the k-way merge primitives). Part of the `stream-chain` / `stream-json` / `stream-join` family. **Node-only** — server / CLI; browsers are out of scope. Scope: anything that **requires or preserves sortedness**.
 
 ## Critical rules
 
-- **CommonJS.** The project is `"type": "commonjs"`. Use `require()` in source, `import` in tests (`.mjs`).
+- **ESM.** The project is `"type": "module"`. Use `import` / `export`; no `require()` / `module.exports`.
 - **No transpilation.** Code runs directly.
-- **One runtime dep today: `stream-chain`.** `stream-join` is added as a second runtime dep once its 2.0.0 publishes (every planned component composes `stream-join`'s `select` + `sortedInsert`). Never add other packages to `dependencies`.
+- **Two runtime deps: `stream-chain` and `stream-join`.** Never add other packages to `dependencies`.
+- **Node-only.** The package targets Node servers and CLIs; the disk-backed sort relies on `node:fs`, `node:os`, `node:path`. No web entry, no browser tests.
 - **Object mode is always on.** Every output Readable forces `objectMode: true`.
 - **Backpressure must be handled correctly** — yield through `readableFrom`; no buffering above the sort's run-buffer.
 - **Sort is disk-backed by default.** External merge sort writes sorted runs to a temp directory; k-way-merges them on output. In-memory-only and sliding-window-approximate strategies were considered and rejected.
@@ -38,7 +39,7 @@ Planned components (in scaffold phase):
 ## Verification commands
 
 - `npm test` — run the full test suite (parallel workers)
-- `node tests/test-<name>.mjs` — run a single test file directly
+- `node tests/test-<name>.js` — run a single test file directly
 - `npm run test:bun` — run with Bun
 - `npm run test:deno` — run with Deno
 - `npm run ts-check` — TypeScript type checking
@@ -51,7 +52,7 @@ Planned components (in scaffold phase):
 - Entry point: `src/index.js` + `src/index.d.ts`
 - Main components: `src/<name>.js` + `.d.ts` (at `src/` root)
 - Helpers: `src/utils/*.js` + `.d.ts`
-- Tests: `tests/test-*.mjs`, `tests/test-*.cjs`, `tests/test-*.mts`
+- Tests: `tests/test-*.js` (ESM) + `tests/helpers.js` for shared utilities
 - Wiki docs: `wiki/` (git submodule)
 
 ## When reading the codebase

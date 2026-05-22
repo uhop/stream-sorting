@@ -2,6 +2,8 @@
 
 `stream-sorting` is a streaming sort plus a suite of operations on sorted object-mode `Readable` streams. The scope rule for the family: **anything that requires or preserves sortedness lives here.** Combinators that know nothing about sortedness (`zip`, `select`, `race`, `concat`) live in [`stream-join`](https://github.com/uhop/stream-join); 1→N split / route / filter ops live in [`stream-fork`](https://github.com/uhop/stream-fork); cross-cutting pipeline plumbing (`readableFrom`, `chain`) lives in [`stream-chain`](https://github.com/uhop/stream-chain).
 
+**Node-only.** The package targets server / CLI contexts. The disk-backed sort relies on `node:fs`, `node:os`, `node:path`; there is no web entry point and no browser test surface. Sorting at billion-record scale is a server problem.
+
 The package is currently in scaffold phase — this document captures the intended shape so the conventions are in place from day one. Sections marked **(planned)** describe components not yet implemented.
 
 ## Project layout
@@ -12,7 +14,7 @@ src/                          # Source code (one main component per file at root
 ├── index.js                  # Entry point
 ├── index.d.ts
 └── utils/                    # Helpers users compose with the main components
-tests/                        # Test files (test-*.mjs, test-*.cjs, test-*.mts using tape-six)
+tests/                        # Test files (test-*.js using tape-six) + helpers.js
 dev-docs/                     # Internal design notes (not in the published tarball)
 wiki/                         # GitHub wiki documentation (git submodule)
 .github/                      # CI workflows, Dependabot config
@@ -32,9 +34,10 @@ The split between `src/` root and `src/utils/` is structural: **main components*
 **Why disk-backed.** The design point is "sort a billion records on a laptop without OOMing." Two alternatives floated during design were rejected: an in-memory-only buffer (does not scale), and a sliding-window approximate sort (does not actually sort — items can come out unordered when the window is too small for the input's disorder).
 
 **Options:**
+
 - `compare: (a, b) => number` — comparator, semantics identical to `Array.prototype.sort`.
 - `memoryBudget?: number` — soft cap on in-memory items per run (heuristic, since item size varies). Default TBD; likely ~64 MB equivalent.
-- `tmpDir?: string` — directory for run files. Default: `os.tmpdir()`.
+- `tmpDir?: string` — directory for run files. **Required** for `LocalFileWrapper` — no default (Linux `/tmp` is commonly tmpfs / RAM-backed and would defeat the algorithm's whole purpose). See `dev-docs/initial.md` for the rationale.
 - `cleanup?: boolean` — delete run files after the merge ends or errors. Default: `true`.
 - `serialize?: (item) => Buffer | string` / `deserialize?: (chunk) => item` — on-disk encoding hooks. Default: JSON line-delimited.
 
@@ -43,6 +46,7 @@ The split between `src/` root and `src/utils/` is structural: **main components*
 SQL-style join of two sorted streams. **Pre-condition:** both inputs are sorted by the join key. Walks both via `stream-join`'s `select` + `sortedInsert(byKey)`; emits combined rows when keys match.
 
 **Options:**
+
 - `keyFn?: (item) => key` (or `keyA` / `keyB` if the two sides use different field names).
 - `compareKey?: (a, b) => number` — defaults to default comparison.
 - `combine?: (rowA, rowB) => merged` — defaults to `{...rowA, ...rowB}`.
@@ -80,7 +84,7 @@ src/index.js → src/sort.js, src/merge-join.js, src/union.js, src/intersection.
                    stream-chain (readableFrom)
 ```
 
-Runtime dependencies: `stream-chain` today; **`stream-join` will be added once its 2.0.0 publishes** (every component above composes `stream-join`'s `select` + `sortedInsert`, so most stay unimplemented until that dep is available). The disk-backed sort additionally relies on Node built-ins (`node:fs`, `node:os`, `node:path`, `node:stream`).
+Runtime dependencies: `stream-chain` and `stream-join`. The disk-backed sort additionally relies on Node built-ins (`node:fs`, `node:os`, `node:path`, `node:stream`).
 
 ## Backpressure
 
@@ -98,7 +102,7 @@ Errors propagate end-to-end with the original value preserved (same model as `st
 
 - **Framework:** `tape-six` (`tape6`).
 - **Run all:** `npm test` (parallel workers via `tape6 --flags FO`).
-- **Run single file:** `node tests/test-<name>.mjs`.
+- **Run single file:** `node tests/test-<name>.js`.
 - **Run with Bun:** `npm run test:bun`.
 - **Run with Deno:** `npm run test:deno`.
 - **TypeScript check:** `npm run ts-check`.
@@ -110,28 +114,28 @@ Errors propagate end-to-end with the original value preserved (same model as `st
 ## Import paths (target)
 
 ```js
-const sort = require('stream-sorting/sort');
-const mergeJoin = require('stream-sorting/merge-join');
-const union = require('stream-sorting/union');
-const intersection = require('stream-sorting/intersection');
-const difference = require('stream-sorting/difference');
-const mergeSorted = require('stream-sorting/merge-sorted');
+import sort from 'stream-sorting/sort.js';
+import mergeJoin from 'stream-sorting/merge-join.js';
+import union from 'stream-sorting/union.js';
+import intersection from 'stream-sorting/intersection.js';
+import difference from 'stream-sorting/difference.js';
+import mergeSorted from 'stream-sorting/merge-sorted.js';
 
 // Helper builders
-const byKey = require('stream-sorting/utils/by-key');
+import byKey from 'stream-sorting/utils/by-key.js';
 ```
 
-The default export from `require('stream-sorting')` is TBD — likely `sort` since it is the headline operation, mirroring `stream-join`'s pattern of defaulting to its headline `zip`.
+The default export from `import 'stream-sorting'` is TBD — likely `sort` since it is the headline operation, mirroring `stream-join`'s pattern of defaulting to its headline `zip`.
 
 ## Family positioning
 
-| Package | Scope |
-|---|---|
-| [`stream-chain`](https://github.com/uhop/stream-chain) | Pipeline plumbing: `chain`, `readableFrom`, `final`. |
-| [`stream-json`](https://github.com/uhop/stream-json) | JSON streaming parser / generator built on `stream-chain`. |
-| [`stream-join`](https://github.com/uhop/stream-join) | N→1 combinators that know nothing about sortedness: `zip`, `select`, `race`, `concat`. Helpers: `pickFirst`, `pickMin`, `sortedInsert`. |
-| [`stream-fork`](https://github.com/uhop/stream-fork) | 1→N split / route / filter. |
-| **`stream-sorting`** | **Anything that requires or preserves sortedness:** external merge sort, key-based join, set operations (union / intersection / difference), sorted merge. |
+| Package                                                | Scope                                                                                                                                                      |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`stream-chain`](https://github.com/uhop/stream-chain) | Pipeline plumbing: `chain`, `readableFrom`, `final`.                                                                                                       |
+| [`stream-json`](https://github.com/uhop/stream-json)   | JSON streaming parser / generator built on `stream-chain`.                                                                                                 |
+| [`stream-join`](https://github.com/uhop/stream-join)   | N→1 combinators that know nothing about sortedness: `zip`, `select`, `race`, `concat`. Helpers: `pickFirst`, `pickMin`, `sortedInsert`.                    |
+| [`stream-fork`](https://github.com/uhop/stream-fork)   | 1→N split / route / filter.                                                                                                                                |
+| **`stream-sorting`**                                   | **Anything that requires or preserves sortedness:** external merge sort, key-based join, set operations (union / intersection / difference), sorted merge. |
 
 Together, the family closes the billion-row pipeline story end-to-end in pure Node streams: sort each input with `stream-sorting`, `mergeJoin` the sorted streams, fork the output downstream.
 

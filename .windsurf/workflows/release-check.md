@@ -18,7 +18,7 @@ Run through this checklist before publishing a new version.
    - `files` array includes `src`, `LICENSE`, `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `llms.txt`, `llms-full.txt`.
    - `exports` map is correct.
    - `funding`, `llms`, `llmsFull` fields are present.
-   - `dependencies` contains only `stream-chain` (scaffold phase) or, once `stream-join` 2.0.0 has published and the components have landed, `stream-chain` plus `stream-join`. Nothing else.
+   - `dependencies` contains exactly `stream-chain` (`^4.0.2`) and `stream-join` (`^2.0.0`). Nothing else.
 8. Check that the copyright year in `LICENSE` includes the current year.
 9. Bump `version` in `package.json`.
 10. Update release history in `README.md` (1–2-line cliff-notes per release; technical-housekeeping floor: `_Minor housekeeping. Updated dev deps._`).

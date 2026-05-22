@@ -9,9 +9,9 @@
 - **`union`** / **`intersection`** / **`difference`** — set operations on sorted streams
 - **`mergeSorted`** — k-way sorted merge without deduplication
 
-`stream-sorting` is part of the `stream-chain` / `stream-json` family. Scope: anything that **requires or preserves sortedness**. Combinators that know nothing about sortedness (`zip`, `select`, `race`, `concat`) live in [`stream-join`](https://www.npmjs.com/package/stream-join); 1→N split / route / filter ops live in [`stream-fork`](https://www.npmjs.com/package/stream-fork).
+`stream-sorting` is part of the `stream-chain` / `stream-json` family. Scope: anything that **requires or preserves sortedness**. Combinators that know nothing about sortedness (`zip`, `select`, `race`, `concat`) live in [`stream-join`](https://www.npmjs.com/package/stream-join); 1→N split / route / filter ops live in [`stream-fork`](https://www.npmjs.com/package/stream-fork). **Node-only** — the package targets server / CLI contexts; browser is out of scope (`node:fs` is load-bearing for the disk-backed sort).
 
-Runtime dependency today: [`stream-chain`](https://www.npmjs.com/package/stream-chain). The k-way-merge phase of the sort, and every sorted-stream operation in the suite, composes [`stream-join`](https://github.com/uhop/stream-join)'s `select` + `sortedInsert` primitives rather than reimplementing them; `stream-join` becomes a second runtime dependency once its 2.0.0 publishes. Distributed under New BSD license.
+Runtime dependencies: [`stream-chain`](https://www.npmjs.com/package/stream-chain) and [`stream-join`](https://www.npmjs.com/package/stream-join). The k-way-merge phase of the sort, and every sorted-stream operation in the suite, composes `stream-join`'s `select` + `sortedInsert` primitives rather than reimplementing them. Distributed under New BSD license.
 
 ## Status
 
@@ -28,12 +28,12 @@ npm i stream-sorting
 ### `sort(stream, options)` — external merge sort
 
 ```js
-const sort = require('stream-sorting/sort');
+import sort from 'stream-sorting/sort.js';
 
 const sorted = sort(input, {
   compare: (a, b) => a.id - b.id,
   memoryBudget: 64 * 1024 * 1024,
-  tmpDir: '/tmp',
+  tmpDir: '/var/sort',
   cleanup: true
 });
 
@@ -45,7 +45,7 @@ Items accumulate in an in-memory buffer up to `memoryBudget`, are sorted with `A
 ### `mergeJoin(streamA, streamB, options)` / `joinBy`
 
 ```js
-const mergeJoin = require('stream-sorting/merge-join');
+import mergeJoin from 'stream-sorting/merge-join.js';
 
 const joined = mergeJoin(left, right, {
   keyFn: row => row.id,
@@ -68,13 +68,13 @@ K-way sorted merge without deduplication. The suite's foundational operation.
 
 ## Family
 
-| Package | Scope |
-|---|---|
+| Package                                                | Scope                                                |
+| ------------------------------------------------------ | ---------------------------------------------------- |
 | [`stream-chain`](https://github.com/uhop/stream-chain) | Pipeline plumbing: `chain`, `readableFrom`, `final`. |
-| [`stream-json`](https://github.com/uhop/stream-json) | JSON streaming parser / generator. |
-| [`stream-join`](https://github.com/uhop/stream-join) | N→1 combinators that know nothing about sortedness. |
-| [`stream-fork`](https://github.com/uhop/stream-fork) | 1→N split / route / filter. |
-| **`stream-sorting`** | **Sort + sorted-stream operations.** |
+| [`stream-json`](https://github.com/uhop/stream-json)   | JSON streaming parser / generator.                   |
+| [`stream-join`](https://github.com/uhop/stream-join)   | N→1 combinators that know nothing about sortedness.  |
+| [`stream-fork`](https://github.com/uhop/stream-fork)   | 1→N split / route / filter.                          |
+| **`stream-sorting`**                                   | **Sort + sorted-stream operations.**                 |
 
 Together, the family closes the billion-row pipeline story end-to-end in pure Node streams: sort each input with `stream-sorting`, `mergeJoin` the sorted streams, fork the output downstream.
 

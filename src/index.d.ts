@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 /**
  * `stream-sorting` — external merge sort and sorted-stream operations.
  *
@@ -5,15 +7,14 @@
  * Public components are imported via their own subpaths:
  *
  * ```js
- * const sort = require('stream-sorting/sort');           // planned
- * const mergeJoin = require('stream-sorting/merge-join'); // planned
- * const union = require('stream-sorting/union');         // planned
- * const intersection = require('stream-sorting/intersection'); // planned
- * const difference = require('stream-sorting/difference'); // planned
- * const mergeSorted = require('stream-sorting/merge-sorted'); // planned
+ * import sort from 'stream-sorting/sort.js';           // planned
+ * import mergeJoin from 'stream-sorting/merge-join.js'; // planned
+ * import union from 'stream-sorting/union.js';         // planned
+ * import intersection from 'stream-sorting/intersection.js'; // planned
+ * import difference from 'stream-sorting/difference.js'; // planned
+ * import mergeSorted from 'stream-sorting/merge-sorted.js'; // planned
  * ```
  *
  * See `ARCHITECTURE.md` for the design and `AGENTS.md` for conventions.
  */
-declare const _exports: {};
-export = _exports;
+export {};

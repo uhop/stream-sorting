@@ -1,6 +1,6 @@
 # stream-sorting
 
-External merge sort and sorted-stream operations for object-mode Node `Readable` streams. Part of the `stream-chain` / `stream-json` / `stream-join` family. Scope: anything that **requires or preserves sortedness**.
+External merge sort and sorted-stream operations for object-mode Node `Readable` streams. Part of the `stream-chain` / `stream-json` / `stream-join` family. Scope: anything that **requires or preserves sortedness**. **Node-only** — server / CLI; browser is out of scope (`node:fs` is load-bearing).
 
 ## Status
 
@@ -14,29 +14,35 @@ Scaffold phase. This file documents the intended public API; components marked *
 - `stream-fork` — 1→N split / route / filter.
 - **`stream-sorting`** — sort + sorted-stream operations.
 
+## Module system
+
+ESM only (`"type": "module"`). Subpath imports include the `.js` extension because the `exports` map wildcards `"./*": "./src/*"` — Node resolves `'stream-sorting/sort.js'` to `./src/sort.js`.
+
 ## API (planned)
 
 ### `sort(stream, options)` — disk-backed external merge sort
 
 ```js
-const sort = require('stream-sorting/sort');
+import sort from 'stream-sorting/sort.js';
 
 const sorted = sort(input, {
   compare: (a, b) => a.id - b.id,
   memoryBudget: 64 * 1024 * 1024,  // optional, soft cap per in-memory run
-  tmpDir: '/tmp',                  // optional, defaults to os.tmpdir()
+  tmpDir: '/var/sort',             // required (no default — see below)
   cleanup: true                    // optional, default true
 });
 
 sorted.pipe(downstream);
 ```
 
+`tmpDir` has no default: Linux `/tmp` is commonly tmpfs (RAM-backed), which would silently defeat the algorithm's whole point. Force the conversation.
+
 Comparator semantics: `Array.prototype.sort` style — negative if `a < b`, positive if `a > b`, zero if equal. Output is an object-mode `Readable`.
 
 ### `mergeJoin(streamA, streamB, options)` / `joinBy` — SQL-style key join of sorted streams
 
 ```js
-const mergeJoin = require('stream-sorting/merge-join');
+import mergeJoin from 'stream-sorting/merge-join.js';
 
 const joined = mergeJoin(left, right, {
   keyFn: row => row.id,
@@ -61,9 +67,10 @@ The foundational operation: k-way merge of pre-sorted streams.
 
 - All outputs are object-mode `Readable` streams.
 - Backpressure is preserved end-to-end via `stream-chain`'s `readableFrom`.
-- Runtime deps: `stream-chain` today; `stream-join` added once its 2.0.0 publishes (every component composes its `select` + `sortedInsert`).
+- Runtime deps: `stream-chain` and `stream-join`. Every component composes `stream-join`'s `select` + `sortedInsert`.
 - Comparator API matches `Array.prototype.sort`: `(a, b) => number`.
 - The sort is disk-backed by design — handles inputs larger than memory.
+- **Node-only** — no web entry point; no browser tests.
 
 ## See also
 

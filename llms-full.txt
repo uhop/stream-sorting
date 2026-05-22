@@ -20,6 +20,10 @@ The `stream-*` family separates concerns by *what the operation knows about the 
 
 The split was settled 2026-05-18 during the stream-join 2.x scope-rationalization pass. `stream-join` deliberately rejected being a home for sort and sort-dependent ops; this package picks them up.
 
+### Why Node-only
+
+Sorting at billion-record scale is fundamentally a server / CLI problem. The headline `sort` is disk-backed via `node:fs`, `node:os`, `node:path`; there is no sensible browser equivalent of "spill sorted runs to local storage." The package has no web entry point and no browser test surface, and we don't plan to add either.
+
 ### Why disk-backed external merge sort
 
 Three strategies were considered for the sort engine:
@@ -34,7 +38,16 @@ The design point is "sort a billion records on a laptop without OOMing." In-memo
 
 The k-way-merge phase is exactly the shape `stream-join`'s `select(streams, options)` was designed for, with `sortedInsert(lessFn)` as the `insert` callback and `pickFirst` as the `pick` callback. Reusing those primitives instead of reimplementing is intentional — it keeps the merge logic in one place, tested in one place, and the two packages co-evolve naturally.
 
-`stream-join` is not yet a declared runtime dependency: its 2.0.0 has not been published as of scaffold time (2026-05-19). The component implementations that need `select` + `sortedInsert` are blocked on that release; once it ships, `stream-join` joins `stream-chain` in `dependencies` and the components land.
+Both `stream-chain` (`^4.0.2`) and `stream-join` (`^2.0.0`) are declared in `dependencies`; component implementations compose their primitives directly.
+
+## Module system
+
+ESM only (`"type": "module"`). Source files use `import` / `export`; tests likewise. Subpath imports must include the `.js` extension because the `exports` map wildcards `"./*": "./src/*"`:
+
+```js
+import sort from 'stream-sorting/sort.js';        // → ./src/sort.js
+import byKey from 'stream-sorting/utils/by-key.js'; // → ./src/utils/by-key.js
+```
 
 ## API reference
 
@@ -50,7 +63,7 @@ function sort<T>(
   options: {
     compare: (a: T, b: T) => number;
     memoryBudget?: number;
-    tmpDir?: string;
+    tmpDir: string;
     cleanup?: boolean;
     serialize?: (item: T) => Buffer | string;
     deserialize?: (chunk: Buffer | string) => T;
@@ -62,7 +75,7 @@ function sort<T>(
 
 - `compare` (required) — `Array.prototype.sort`-style comparator. Returns negative if `a < b`, positive if `a > b`, zero if equal. The comparator must be consistent (transitive, antisymmetric, reflexive on equality) or the output is undefined.
 - `memoryBudget` — soft cap on in-memory items per run, expressed as either an item count (>0 integer) or a byte estimate (TBD). Default TBD; likely ~64 MB equivalent.
-- `tmpDir` — directory where sorted-run files are written. Default: `os.tmpdir()`. Files are named with a unique prefix per `sort()` call.
+- `tmpDir` (**required**) — directory where sorted-run files are written. No default: Linux `/tmp` is commonly tmpfs (RAM-backed), which would silently defeat the algorithm's purpose. Files are named with a unique prefix per `sort()` call.
 - `cleanup` — delete run files after the output ends or errors. Default: `true`. Set to `false` for debugging or if downstream wants to re-merge the same runs.
 - `serialize` / `deserialize` — on-disk encoding hooks. Defaults: JSON line-delimited (`JSON.stringify` + `JSON.parse` + newline framing). Override for non-JSON-friendly payloads (Buffers, Dates, BigInts, custom classes).
 
@@ -124,7 +137,7 @@ function mergeSorted<T>(
 
 k-way merge of pre-sorted input streams. Each item from any input appears once in the output; duplicates across streams are preserved (use `union` for dedup).
 
-Equivalent to `stream-join/utils/merge-sorted`. Open decision (see `projects/stream-sorting/queue.md`): whether `stream-join`'s copy becomes a re-export from here, or both packages keep an independent copy.
+Equivalent to `stream-join/utils/merge-sorted.js`. Open decision (see `projects/stream-sorting/queue.md`): whether `stream-join`'s copy becomes a re-export from here, or both packages keep an independent copy.
 
 ### Set operations on sorted streams (planned)
 
@@ -147,12 +160,12 @@ Equality is defined by `!lessFn(a, b) && !lessFn(b, a)` — i.e., neither is les
 ### Sort a stream of records by ID
 
 ```js
-const sort = require('stream-sorting/sort');
-const {pipeline} = require('node:stream/promises');
+import sort from 'stream-sorting/sort.js';
+import {pipeline} from 'node:stream/promises';
 
 await pipeline(
   input,
-  sort(input, {compare: (a, b) => a.id - b.id}),
+  sort(input, {compare: (a, b) => a.id - b.id, tmpDir: '/var/sort'}),
   output
 );
 ```
@@ -160,13 +173,13 @@ await pipeline(
 ### Join two large feeds by ID
 
 ```js
-const sort = require('stream-sorting/sort');
-const mergeJoin = require('stream-sorting/merge-join');
+import sort from 'stream-sorting/sort.js';
+import mergeJoin from 'stream-sorting/merge-join.js';
 
 const byId = (a, b) => a.id - b.id;
 
-const sortedLeft = sort(left,  {compare: byId});
-const sortedRight = sort(right, {compare: byId});
+const sortedLeft = sort(left,  {compare: byId, tmpDir: '/var/sort'});
+const sortedRight = sort(right, {compare: byId, tmpDir: '/var/sort'});
 
 const joined = mergeJoin(sortedLeft, sortedRight, {
   keyFn: r => r.id,
@@ -180,7 +193,7 @@ joined.pipe(output);
 ### Deduplicate across N pre-sorted feeds
 
 ```js
-const union = require('stream-sorting/union');
+import union from 'stream-sorting/union.js';
 const lessByKey = (a, b) => a.key < b.key;
 
 union([feed1, feed2, feed3], lessByKey).pipe(output);
@@ -198,13 +211,13 @@ union([feed1, feed2, feed3], lessByKey).pipe(output);
 The package's outputs are plain `Readable` streams. They drop into `stream-chain` pipelines without adapters:
 
 ```js
-const chain = require('stream-chain');
-const sort = require('stream-sorting/sort');
+import chain from 'stream-chain';
+import sort from 'stream-sorting/sort.js';
 
 const pipeline = chain([
   source,
   transform,
-  sort(/* upstream */, {compare}),
+  sort(/* upstream */, {compare, tmpDir: '/var/sort'}),
   consumer
 ]);
 ```
@@ -214,8 +227,8 @@ const pipeline = chain([
 `stream-sorting` builds on `stream-join`'s primitives but does not re-export them. If a user needs the lower-level merge tools directly:
 
 ```js
-const select = require('stream-join/select');
-const sortedInsert = require('stream-join/utils/sorted-insert');
+import select from 'stream-join/select.js';
+import sortedInsert from 'stream-join/utils/sorted-insert.js';
 
 // Hand-rolled k-way merge:
 const merged = select(streams, {
