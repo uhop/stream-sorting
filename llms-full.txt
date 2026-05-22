@@ -78,10 +78,6 @@ await w.end();
 
 Custom wrappers for S3, SSH-pipe, sharded volumes, etc., satisfy the interface structurally — see `dev-docs/initial.md` § "Object-stream wrapper protocol" for recipes.
 
-## API reference
-
-### `sort(stream, options)` — external merge sort (planned)
-
 ## Design context
 
 ### Why a separate package
@@ -121,47 +117,69 @@ Both `stream-chain` (`^4.0.2`) and `stream-join` (`^2.0.0`) are declared in `dep
 ESM only (`"type": "module"`). Source files use `import` / `export`; tests likewise. Subpath imports must include the `.js` extension because the `exports` map wildcards `"./*": "./src/*"`:
 
 ```js
-import sort from 'stream-sorting/sort.js';        // → ./src/sort.js
-import byKey from 'stream-sorting/utils/by-key.js'; // → ./src/utils/by-key.js
+import sort from 'stream-sorting/sort.js';            // → ./src/sort.js
+import {LocalFileWrapper} from 'stream-sorting';      // → ./src/index.js
 ```
 
-Sorts an object-mode `Readable` stream of arbitrary cardinality. Returns a new object-mode `Readable` of the same items in `compare` order.
+## API reference
+
+### `sort(input, options)` — external merge sort (shipped)
+
+Sorts an iterable of any cardinality. `input` is `AsyncIterable<T> | Iterable<T>` (Node Readables, Web ReadableStreams, generators, and arrays all satisfy). Returns an `AsyncIterable<T>` (an async generator) — user converts at the boundary to whatever stream type they want, paying the per-runtime cost only where they need it.
 
 **Signature:**
 
 ```ts
 function sort<T>(
-  stream: Readable,
-  options: {
-    compare: (a: T, b: T) => number;
-    memoryBudget?: number;
-    tmpDir: string;
-    cleanup?: boolean;
-    serialize?: (item: T) => Buffer | string;
-    deserialize?: (chunk: Buffer | string) => T;
-  }
-): Readable;
+  input: AsyncIterable<T> | Iterable<T>,
+  options:
+    | {compare: (a: T, b: T) => number}
+    | {lessFn: (a: T, b: T) => boolean}
+    & ({tmpDir: string} | {createWrapper: (runIndex: number) => ObjectStreamWrapper<unknown>})
+    & {
+        batchSize?: number;       // default 10000
+        stable?: boolean;          // default true
+        onProgress?: (stats: SortProgressStats) => void;
+        keepTempFiles?: boolean;   // default false
+      }
+): AsyncGenerator<T, void, void>;
 ```
 
 **Parameters:**
 
-- `compare` (required) — `Array.prototype.sort`-style comparator. Returns negative if `a < b`, positive if `a > b`, zero if equal. The comparator must be consistent (transitive, antisymmetric, reflexive on equality) or the output is undefined.
-- `memoryBudget` — soft cap on in-memory items per run, expressed as either an item count (>0 integer) or a byte estimate (TBD). Default TBD; likely ~64 MB equivalent.
-- `tmpDir` (**required**) — directory where sorted-run files are written. No default: Linux `/tmp` is commonly tmpfs (RAM-backed), which would silently defeat the algorithm's purpose. Files are named with a unique prefix per `sort()` call.
-- `cleanup` — delete run files after the output ends or errors. Default: `true`. Set to `false` for debugging or if downstream wants to re-merge the same runs.
-- `serialize` / `deserialize` — on-disk encoding hooks. Defaults: JSON line-delimited (`JSON.stringify` + `JSON.parse` + newline framing). Override for non-JSON-friendly payloads (Buffers, Dates, BigInts, custom classes).
+- `compare` OR `lessFn` (exactly one required) — comparator. `compare(a, b)` returns negative if `a < b`, positive if `a > b`, zero if equal (`Array.prototype.sort` style). `lessFn(a, b)` returns `true` if `a` should come before `b` (matches stream-join's primitive). Internally normalized to whichever the consuming step needs.
+- `tmpDir` OR `createWrapper` (exactly one required) — storage strategy. `tmpDir` is sugar for `createWrapper: (i) => new LocalFileWrapper({path: tmpDir + '/stream-sorting-<pid>-<uuid>-' + i + '.jsonl'})`. Pass `createWrapper` directly for `MemoryWrapper` (tests), S3, sharded volumes, etc. `LocalFileWrapper` has no default `tmpDir` because Linux `/tmp` is commonly tmpfs — pass the path explicitly.
+- `batchSize` — soft cap on in-memory items per run. Default `10000`. Tune up for compact items (more items fit in RAM → fewer disk writes); tune down for fat items.
+- `stable` — default `true`. When `true`, ties (`compare` returns 0) are broken by input order via an internal monotonic sequence tag added to each item and stripped before emission. Set `false` if your comparator already encodes a tiebreaker (e.g., sorting by `(price, id)`) — saves ~8 bytes per item on disk plus one extra comparison per merge step.
+- `onProgress(stats)` — called on natural event boundaries (run-complete during pre-sort, merge-start). Stats shape: `{phase: 'pre-sort' | 'final-merge', itemsRead, itemsWritten, runsCreated}`.
+- `keepTempFiles` — default `false`. When `true`, skips wrapper deletion after the algorithm completes (file handles released via `close()`, but underlying storage preserved for debugging or re-merge).
 
-**Returns:** an object-mode `Readable` that emits items in `compare` order. Backpressure flows naturally — the merge generator only advances when the output is drained.
+**Returns:** an async generator. Iterate via `for await`, or convert at the boundary:
 
-**Run formation:** as items arrive, they accumulate in an in-memory buffer until `memoryBudget` is hit. Then the buffer is sorted with `Array.prototype.sort(compare)` and flushed to a run file. Repeat until input ends.
+```js
+for await (const item of sort(input, opts)) ...                     // direct
+readableFrom(sort(input, opts)).pipe(downstream)                    // Node Readable
+ReadableStream.from(sort(input, opts)).pipeTo(webDst)               // Web ReadableStream
+```
 
-**k-way merge:** all run files are opened as object-mode `Readable` streams (one per file, deserialized via `deserialize`). They are merged via `stream-join`'s `select` + `sortedInsert(lessFn)` adapter (where `lessFn(a, b) = compare(a, b) < 0`). Output yielded through `stream-chain`'s `readableFrom`.
+**Run formation.** Pulls items into an in-memory buffer up to `batchSize`; when the buffer is full and another item arrives, sorts the buffer with `Array.prototype.sort` and drains it to a fresh wrapper via `consume()`. The last batch is held until input is exhausted.
+
+**In-memory fast path.** When `input.length ≤ batchSize`, no wrapper is created — the algorithm sorts the buffer in memory and yields directly.
+
+**Single-run path.** When the algorithm flushes exactly one run, it skips the merge and streams the run back directly via `wrapper.openReader()`.
+
+**K-way merge.** When two or more runs exist, the algorithm wraps each `wrapper.openReader()` (`AsyncIterable<T>`) via `stream-chain`'s `readableFrom` to a Node Readable, then composes `stream-join`'s `mergeSorted(readables, lessFn)` for the final merge. The output of the merge is iterated via `for await` and yielded as our generator's output. (The internal Node-Readable wrap is an implementation detail because stream-join 2.x takes `Readable[]`; an open queue item tracks moving stream-join to AsyncIterable-based APIs in a 3.0.)
+
+**Stability mechanism.** Each item gets a `{item, tag}` envelope during the pull phase (`tag` is a monotonic counter); the internal comparator compares `.item` first, ties broken by `.tag`. Envelopes are stripped on emit.
+
+**Cleanup.** A `finally` block runs `wrapper.delete()` on every wrapper created (or `wrapper.close()` if `keepTempFiles: true`). Comparator throws, input errors, and consumer breaks all trigger cleanup.
 
 **Edge cases:**
-- Empty input: emits zero values and ends.
-- Single in-memory chunk (input fits in `memoryBudget`): no disk write, sorts in memory, emits directly. Fast-path.
-- Input emits before all runs are written: backpressure stalls the run-formation loop; producer pauses.
-- Comparator throws: the error propagates as the output's `'error'` event; run files cleaned up.
+- Empty input: emits zero values and returns.
+- Input fits in one batch: in-memory fast path (no disk, no wrapper).
+- Input emits exactly one full run: single-run path (wrapper used, no merge).
+- Comparator throws during sort or merge: error propagates to the consumer; cleanup runs.
+- Input stream errors: error propagates; cleanup runs.
 
 ### `mergeJoin(streamA, streamB, options)` / `joinBy` — key-based join of sorted streams (planned)
 

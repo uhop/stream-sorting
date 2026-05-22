@@ -59,26 +59,33 @@ for await (const item of m.openReader()) console.log(item);
 
 `LocalFileWrapper`'s `path` is required (no `tmpDir` default — Linux `/tmp` is commonly tmpfs and would defeat the disk-backed sort). Custom wrappers (S3, SSH, sharded volumes) satisfy the interface structurally.
 
-## API (planned)
+## API
 
-### `sort(stream, options)` — disk-backed external merge sort
+### `sort(input, options)` — external merge sort (shipped)
 
 ```js
 import sort from 'stream-sorting/sort.js';
 
-const sorted = sort(input, {
-  compare: (a, b) => a.id - b.id,
-  memoryBudget: 64 * 1024 * 1024,  // optional, soft cap per in-memory run
-  tmpDir: '/var/sort',             // required (no default — see below)
-  cleanup: true                    // optional, default true
-});
+// Returns AsyncIterable<T>. Convert at the boundary:
+for await (const item of sort(input, opts)) ...                     // direct
+readableFrom(sort(input, opts)).pipe(downstream)                    // Node Readable
+ReadableStream.from(sort(input, opts)).pipeTo(webDst)               // Web ReadableStream
 
-sorted.pipe(downstream);
+const sorted = sort(input, {
+  compare: (a, b) => a.id - b.id,  // OR lessFn
+  batchSize: 10000,                // optional, soft cap per in-memory run; default 10000
+  tmpDir: '/var/sort',             // OR createWrapper
+  stable: true,                    // optional, default true
+  onProgress: stats => ...,        // optional
+  keepTempFiles: false             // optional, default false
+});
 ```
 
-`tmpDir` has no default: Linux `/tmp` is commonly tmpfs (RAM-backed), which would silently defeat the algorithm's whole point. Force the conversation.
+`input` is `AsyncIterable<T> | Iterable<T>` — Node Readables, Web ReadableStreams, generators, and arrays all satisfy. Output is `AsyncIterable<T>`. Comparator semantics: `Array.prototype.sort` style — negative if `a < b`, positive if `a > b`, zero if equal. Stable by default (ties preserve input order via internal sequence tag, stripped before emit).
 
-Comparator semantics: `Array.prototype.sort` style — negative if `a < b`, positive if `a > b`, zero if equal. Output is an object-mode `Readable`.
+**`tmpDir` has no default:** Linux `/tmp` is commonly tmpfs (RAM-backed), which would silently defeat the algorithm. Pass an explicit path, or use `createWrapper: (runIndex) => new MyWrapper(...)` for non-FS storage (S3, in-memory for tests, etc.). In-memory fast path when `input.length ≤ batchSize` — no wrapper involved.
+
+### Planned API
 
 ### `mergeJoin(streamA, streamB, options)` / `joinBy` — SQL-style key join of sorted streams
 
