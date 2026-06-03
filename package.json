@@ -54,8 +54,6 @@
     "src",
     "LICENSE",
     "README.md",
-    "AGENTS.md",
-    "ARCHITECTURE.md",
     "llms.txt",
     "llms-full.txt"
   ],
