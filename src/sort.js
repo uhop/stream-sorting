@@ -8,26 +8,9 @@ import mergeSorted from 'stream-join/utils/merge-sorted.js';
 
 import LocalFileWrapper from './local-file-wrapper.js';
 import {consume} from './wrapper.js';
+import {normalizeComparator, validateInput, makeStability} from './ordering.js';
 
 const DEFAULT_BATCH_SIZE = 10000;
-
-const normalizeComparator = ({compare, lessFn}) => {
-  if (compare !== undefined && lessFn !== undefined) {
-    throw new TypeError('sort: pass `compare` OR `lessFn`, not both');
-  }
-  if (compare !== undefined) {
-    if (typeof compare !== 'function') throw new TypeError('sort: `compare` must be a function');
-    return {compare, lessFn: (a, b) => compare(a, b) < 0};
-  }
-  if (lessFn !== undefined) {
-    if (typeof lessFn !== 'function') throw new TypeError('sort: `lessFn` must be a function');
-    return {
-      lessFn,
-      compare: (a, b) => (lessFn(a, b) ? -1 : lessFn(b, a) ? 1 : 0)
-    };
-  }
-  throw new TypeError('sort: either `compare` or `lessFn` is required');
-};
 
 const resolveWrapperFactory = ({tmpDir, createWrapper}) => {
   if (tmpDir !== undefined && createWrapper !== undefined) {
@@ -51,16 +34,13 @@ const resolveWrapperFactory = ({tmpDir, createWrapper}) => {
 };
 
 const sort = (input, options) => {
-  if (input == null) throw new TypeError('sort: input is required');
-  if (input[Symbol.asyncIterator] == null && input[Symbol.iterator] == null) {
-    throw new TypeError('sort: input must be iterable or async iterable');
-  }
+  validateInput(input, 'sort');
   if (!options) throw new TypeError('sort: options object is required');
 
-  const {compare, lessFn} = normalizeComparator({
-    compare: options.compare,
-    lessFn: options.lessFn
-  });
+  const {compare, lessFn} = normalizeComparator(
+    {compare: options.compare, lessFn: options.lessFn},
+    'sort'
+  );
 
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
   if (!Number.isInteger(batchSize) || batchSize <= 0)
@@ -97,24 +77,7 @@ async function* runSort({
   onProgress,
   createWrapper
 }) {
-  // Stability: tag items with a monotonic sequence number; tag wins ties when
-  // the user comparator returns 0. Strip the tag before emitting.
-  let tagCounter = 0;
-  const wrap = stable ? item => ({item, tag: tagCounter++}) : item => item;
-  const unwrap = stable ? envelope => envelope.item : item => item;
-  const runCompare = stable
-    ? (a, b) => {
-        const c = compare(a.item, b.item);
-        return c !== 0 ? c : a.tag - b.tag;
-      }
-    : compare;
-  const mergeLess = stable
-    ? (a, b) => {
-        if (lessFn(a.item, b.item)) return true;
-        if (lessFn(b.item, a.item)) return false;
-        return a.tag < b.tag;
-      }
-    : lessFn;
+  const {wrap, unwrap, runCompare, mergeLess} = makeStability(stable, compare, lessFn);
 
   const wrappers = [];
   let itemsRead = 0;
@@ -150,7 +113,6 @@ async function* runSort({
     }
 
     if (wrappers.length === 0) {
-      // In-memory fast path: input fit in batchSize; no disk write.
       buffer.sort(runCompare);
       itemsWritten = buffer.length;
       emitProgress('final-merge');
@@ -161,13 +123,11 @@ async function* runSort({
     if (buffer.length > 0) await flushRun();
 
     if (wrappers.length === 1) {
-      // Single run: stream it back directly, no merge.
       emitProgress('final-merge');
       for await (const envelope of wrappers[0].openReader()) yield unwrap(envelope);
       return;
     }
 
-    // K-way merge across runs via stream-join.
     const readables = wrappers.map(w => readableFrom(w.openReader()));
     const merged = mergeSorted(readables, mergeLess);
     emitProgress('final-merge');

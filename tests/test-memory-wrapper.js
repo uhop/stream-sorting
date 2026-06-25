@@ -95,7 +95,7 @@ test('MemoryWrapper: openWriter while reading throws', async t => {
   await writer.writeAll([1, 2]);
   await writer.end();
   const iter = w.openReader()[Symbol.asyncIterator]();
-  await iter.next(); // partially consume
+  await iter.next();
   t.throws(() => w.openWriter(), /cannot openWriter\(\) while reading/);
   await iter.return();
 });
@@ -133,7 +133,6 @@ test('MemoryWrapper: thrown exception in loop triggers return() cleanup', async 
   } catch (err) {
     t.equal(err.message, 'boom');
   }
-  // Should be back to idle.
   w.openWriter();
   t.pass('openWriter after thrown loop works');
 });
