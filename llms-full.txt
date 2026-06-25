@@ -4,7 +4,7 @@ External merge sort and sorted-stream operations for object-mode Node `Readable`
 
 ## Status
 
-The package is mid-build. The wrapper protocol, two built-in wrappers (`MemoryWrapper`, `LocalFileWrapper`), and both sort algorithms (`sort`, `polyphaseSort`) have shipped. Components below marked **(planned)** are still unimplemented. The shape captured here is the design target — implementation lands incrementally per `projects/stream-sorting/queue.md` in Eugene's vault.
+The package is mid-build. The wrapper protocol, two built-in wrappers (`MemoryWrapper`, `LocalFileWrapper`), both sort algorithms (`sort`, `polyphaseSort`), and the join family (`join`, `leftJoin`, `fullJoin`) have shipped. Components below marked **(planned)** are still unimplemented. The shape captured here is the design target — implementation lands incrementally per `projects/stream-sorting/queue.md` in Eugene's vault.
 
 ## Object-stream wrapper protocol (shipped)
 
@@ -223,51 +223,62 @@ function polyphaseSort<T>(
 
 **Why polyphase vs k-way.** Prefer `sort` on modern SSDs (single-pass merge, cheap file handles). Prefer `polyphaseSort` when the number of open files must be bounded, or storage is spread across expensive / remote backends.
 
-### `mergeJoin(streamA, streamB, options)` / `joinBy` — key-based join of sorted streams (planned)
+### `join(inputs, options)` / `leftJoin` / `fullJoin` — key-based join of sorted streams
 
 ```ts
-function mergeJoin<A, B, K, R>(
-  streamA: Readable,
-  streamB: Readable,
-  options: {
-    keyFn?: (item: A | B) => K;
-    keyA?: (item: A) => K;
-    keyB?: (item: B) => K;
-    compareKey?: (a: K, b: K) => number;
-    combine?: (rowA: A | null, rowB: B | null) => R;
-    variant?: 'inner' | 'left' | 'right' | 'full';
+interface JoinInput<T, K> {
+  input: AsyncIterable<T> | Iterable<T>;
+  key?: (item: T) => K; // default: identity
+  optional?: boolean; // default: false — when true, null-filled if absent at a key
+}
+
+function join<I extends Record<string, JoinInput<any, any>>, R>(
+  inputs: I, // named map: { left: {input, key}, right: {input, key}, ... }
+  options?: {
+    compareKey?: (a: any, b: any) => number; // default: natural order
+    lessKey?: (a: any, b: any) => boolean; // provide this OR compareKey
+    combine?: (bag: Record<string, any | null>) => R | undefined; // default: bag => bag
+    maxGroupSize?: number; // throw if an equal-key group exceeds this
   }
-): Readable;
+): AsyncGenerator<R, void, void>;
 ```
 
-**Pre-condition:** both inputs are sorted by the join key under `compareKey`.
+Import from `stream-sorting/sorted/join.js` (and `sorted/left-join.js`, `sorted/full-join.js`); all three are re-exported from the index.
 
-**Variants:**
-- `'inner'` (default) — emit only when both sides have a row at the current key.
-- `'left'` — also emit unmatched left rows with `rowB = null`.
-- `'right'` — also emit unmatched right rows with `rowA = null`.
-- `'full'` — also emit unmatched rows on either side.
+**Pre-condition:** every input is sorted by its key under `compareKey`; an out-of-order input throws at runtime.
 
-**Defaults:**
-- `keyFn = identity` if neither `keyA` nor `keyB` is given.
-- `compareKey` — default ordering (`<` / `>`).
-- `combine = (a, b) => ({...a, ...b})` — shallow merge.
+**Inputs are a named map.** Each descriptor's `key` extracts the join key (default identity); the map key names the input on input and in the result.
 
-Equal keys on either side (multi-row groups) form a Cartesian product, like SQL joins. Implementation walks both streams via `stream-join`'s `select` + `sortedInsert(byKey)`, advancing the side with the smaller key on non-matches.
+**Semantics:**
+- **Inner by default** — a row emits only when every required input has the key.
+- **Equal keys form a Cartesian product**, like SQL joins (`m × n` rows).
+- **`combine` receives a named bag** keyed by the input names (`{left, right, …}`), absent optional inputs as `null`. Default returns the bag unchanged; returning `undefined` drops that combination (a join-time filter).
+- **Outer joins via `optional`** — mark an input `optional: true` to null-fill it. `leftJoin` (first input required, rest optional) and `fullJoin` (all optional) are thin wrappers; for arbitrary requiredness across N inputs set `optional` per input on `join`.
+- **N-way** — any number of inputs; composite/tuple keys need an explicit `compareKey`.
 
-### `mergeSorted(streams, lessFn, options?)` — sorted merge without dedup (planned)
+Implemented as a custom group-aware merge (the D3 exception, like `polyphaseSort`) sharing a peekable reader at `src/reader.js` — a flat `select` + `sortedInsert` merge can't express equal-key grouping plus the Cartesian product.
+
+### Filters: `matching` / `unmatched` (planned)
+
+Filters emitting rows of the primary stream based on whether the key is present (`matching`) or absent (`unmatched`) in the other — no `combine`, no product; whole rows pass through. The former semi/anti joins; they share the merge walk with the set operations and may be exposed as aliases of keyed `intersection` / `difference`.
+
+### `aggregate` (planned)
+
+Fold child streams under a master (or a key-derived group) by key — SQL-style group/aggregate. Per child: `init()` / `fold(acc, item)` / `finalize(acc)`, default collect-to-array, covering every scalar SQL aggregate (`array_agg` ordering is free since children arrive sorted). Multi-level nesting (department → employee → equipment) is done by composition — a `join` to enrich foreign keys, a re-`sort` to the ancestor key path, then a flat `aggregate` per level — not a recursive descriptor.
+
+### `merge(streams, lessFn, options?)` — sorted merge without dedup (planned)
 
 ```ts
-function mergeSorted<T>(
-  streams: Readable[],
+function merge<T>(
+  streams: Array<AsyncIterable<T> | Iterable<T>>,
   lessFn: (a: T, b: T) => boolean,
   options?: {
-    /* TBD — likely passed through to readableFrom */
+    /* TBD */
   }
-): Readable;
+): AsyncGenerator<T, void, void>;
 ```
 
-k-way merge of pre-sorted input streams. Each item from any input appears once in the output; duplicates across streams are preserved (use `union` for dedup).
+k-way merge of pre-sorted input streams (was `mergeSorted`). Each item from any input appears once in the output; duplicates across streams are preserved (use `union` for dedup).
 
 Equivalent to `stream-join/utils/merge-sorted.js`. Open decision (see `projects/stream-sorting/queue.md`): whether `stream-join`'s copy becomes a re-export from here, or both packages keep an independent copy.
 
@@ -281,7 +292,7 @@ function difference<T>(streamA: Readable, streamsB: Readable[], lessFn: (a: T, b
 
 All take pre-sorted inputs under `lessFn` and emit a sorted output.
 
-- **`union`** — sorted merge with duplicate elimination across streams. `{1,2,3} ∪ {2,3,4} = {1,2,3,4}`. Distinct from `mergeSorted` which preserves duplicates. Implementation: `select` + `sortedInsert` wrapping the picker with "skip if equal to last emitted."
+- **`union`** — sorted merge with duplicate elimination across streams. `{1,2,3} ∪ {2,3,4} = {1,2,3,4}`. Distinct from `merge` which preserves duplicates. Implementation: `select` + `sortedInsert` wrapping the picker with "skip if equal to last emitted."
 - **`intersection`** — values present in **all** streams. 2-way walks both, emitting on match; k-way tracks the current key across all and emits when all agree.
 - **`difference`** — values in `streamA` not present in any `streamsB[i]`. 2-way walks both, emitting from A when smaller, skipping when equal, advancing B when smaller.
 
@@ -306,20 +317,20 @@ await pipeline(
 
 ```js
 import sort from 'stream-sorting/sort.js';
-import mergeJoin from 'stream-sorting/merge-join.js';
+import leftJoin from 'stream-sorting/sorted/left-join.js';
+import readableFrom from 'stream-chain/utils/readableFrom.js';
 
 const byId = (a, b) => a.id - b.id;
 
-const sortedLeft = sort(left,  {compare: byId, tmpDir: '/var/sort'});
+const sortedLeft = sort(left, {compare: byId, tmpDir: '/var/sort'});
 const sortedRight = sort(right, {compare: byId, tmpDir: '/var/sort'});
 
-const joined = mergeJoin(sortedLeft, sortedRight, {
-  keyFn: r => r.id,
-  combine: (l, r) => ({...l, ...r}),
-  variant: 'left'
-});
+const joined = leftJoin(
+  {left: {input: sortedLeft, key: r => r.id}, right: {input: sortedRight, key: r => r.id}},
+  {combine: ({left, right}) => ({...left, ...right})}
+);
 
-joined.pipe(output);
+readableFrom(joined).pipe(output);
 ```
 
 ### Deduplicate across N pre-sorted feeds
@@ -369,7 +380,7 @@ const merged = select(streams, {
 });
 ```
 
-`stream-sorting`'s `mergeSorted` (planned) is the same composition wrapped under a friendlier name.
+`stream-sorting`'s `merge` (planned) is the same composition wrapped under a friendlier name.
 
 ## See also
 

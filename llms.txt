@@ -4,7 +4,7 @@ External merge sort and sorted-stream operations for object-mode Node `Readable`
 
 ## Status
 
-Mid-build. The wrapper protocol + two built-in wrappers and both sort algorithms (`sort`, `polyphaseSort`) have shipped. The sorted-stream operations below are still **(planned)**. Track progress in the vault: `projects/stream-sorting/queue.md`.
+Mid-build. The wrapper protocol + two built-in wrappers, both sort algorithms (`sort`, `polyphaseSort`), and the join family (`join`, `leftJoin`, `fullJoin`) have shipped. The sorted-stream operations below are still **(planned)**. Track progress in the vault: `projects/stream-sorting/queue.md`.
 
 ## Family positioning
 
@@ -103,37 +103,31 @@ const sorted = polyphaseSort(input, {
 
 Fixed-file-budget companion to `sort`: uses exactly `K` files regardless of input size, for bounded file budgets or storage spread across drives / buckets / machines (pass one wrapper per backend via `files`). Same in/out shape and comparator / stability semantics as `sort`; in-memory fast path when `input ≤ batchSize`. Storage is `files` (explicit wrappers, `K = files.length ≥ 3`) OR `k` with `tmpDir` / `createWrapper`. Uses a custom series-aware merge, not `stream-join`'s `mergeSorted`.
 
-### Planned API
-
-### `mergeJoin(streamA, streamB, options)` / `joinBy` — SQL-style key join of sorted streams
+### `join(inputs, options)` / `leftJoin` / `fullJoin` — key-based join of sorted streams
 
 ```js
-import mergeJoin from 'stream-sorting/merge-join.js';
+import join from 'stream-sorting/sorted/join.js';
 
-const joined = mergeJoin(left, right, {
-  keyFn: row => row.id,
-  combine: (a, b) => ({...a, ...b}),
-  variant: 'inner'   // 'inner' | 'left' | 'right' | 'full'
-});
+const joined = join(
+  {dept: {input: departments, key: d => d.id}, emp: {input: employees, key: e => e.deptId}},
+  {combine: ({dept, emp}) => ({...dept, ...emp})}
+);
 ```
 
-**Pre-condition:** both inputs are sorted by the join key.
+Inner join by default. `inputs` is a named map `{name: {input, key?, optional?}}` (`key` defaults to identity); all inputs must be sorted by key. Equal keys form a Cartesian product. `combine(bag)` builds each row from the named bag `{name: row | null}` (default returns the bag; return `undefined` to drop). `compareKey` OR `lessKey` (default natural order; composite/tuple keys need an explicit comparator), optional `maxGroupSize`. `optional: true` null-fills a side; `leftJoin` (first input required, rest optional) and `fullJoin` (all optional) are thin wrappers. `AsyncIterable | Iterable` in → `AsyncGenerator` out; throws on an out-of-order input.
 
-### Set operations on sorted streams
+### Planned API
 
-- `union(streams, lessFn)` — sorted merge with cross-stream dedup.
-- `intersection(streams, lessFn)` — values in all streams.
-- `difference(streamA, streamsB, lessFn)` — values in `streamA` not in any `streamsB[i]`.
-
-### `mergeSorted(streams, lessFn, options?)` — sorted merge without dedup
-
-The foundational operation: k-way merge of pre-sorted streams.
+- **`matching` / `unmatched`** — filters: rows of the primary stream whose key is present / absent in the other.
+- **`aggregate`** — fold child streams under a master (or a key-derived group) by key; SQL-style group/aggregate; multi-level nesting by composition.
+- **`union(streams, lessFn)` / `intersection(streams, lessFn)` / `difference(streamA, streamsB, lessFn)`** — set operations on sorted streams by value.
+- **`merge(streams, lessFn, options?)`** — k-way sorted merge without dedup; the suite's foundational op (was `mergeSorted`).
 
 ## Critical rules
 
 - All outputs are object-mode `Readable` streams.
 - Backpressure is preserved end-to-end via `stream-chain`'s `readableFrom`.
-- Runtime deps: `stream-chain` and `stream-join`. `sort` and the planned sorted-stream ops compose `stream-join`'s `select` + `sortedInsert`; `polyphaseSort` uses a custom merge.
+- Runtime deps: `stream-chain` and `stream-join`. `sort`'s k-way merge composes `stream-join`'s `mergeSorted` (built on `select` + `sortedInsert`); `polyphaseSort` and the join family use custom group-aware merges.
 - Comparator API matches `Array.prototype.sort`: `(a, b) => number`.
 - The sort is disk-backed by design — handles inputs larger than memory.
 - **Node-only** — no web entry point; no browser tests.

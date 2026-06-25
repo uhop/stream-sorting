@@ -4,7 +4,7 @@
 
 **Node-only.** The package targets server / CLI contexts. The disk-backed sort relies on `node:fs`, `node:os`, `node:path`; there is no web entry point and no browser test surface. Sorting at billion-record scale is a server problem.
 
-The package is mid-build. The wrapper protocol, its two built-in implementations, and both sort algorithms (`sort`, `polyphaseSort`) have shipped (see below); the sorted-stream operations that build on them are still **(planned)**.
+The package is mid-build. The wrapper protocol, its two built-in implementations, both sort algorithms (`sort`, `polyphaseSort`), and the join family (`join`, `leftJoin`, `fullJoin`) have shipped (see below); the remaining sorted-stream operations are still **(planned)**.
 
 ## Project layout
 
@@ -13,6 +13,7 @@ package.json                  # Package config; "tape6" section configures test 
 src/                          # Source code (one main component per file at root)
 ├── index.js                  # Entry point
 ├── index.d.ts
+├── sorted/                   # Operations on sorted streams (join, leftJoin, fullJoin, …)
 └── utils/                    # Helpers users compose with the main components
 tests/                        # Test files (test-*.js using tape-six) + helpers.js
 dev-docs/                     # Internal design notes (not in the published tarball)
@@ -84,30 +85,37 @@ The fixed-file-budget companion to `sort`: it uses exactly `K` files regardless 
 
 **Options:** `compare` / `lessFn`, `batchSize`, `stable`, `onProgress`, `keepTempFiles` as in `sort`, plus storage: `files: ObjectStreamWrapper[]` (explicit, `K = files.length ≥ 3`, user-owned — closed not deleted) **or** `k?: number` (default 4, min 3) with `tmpDir` / `createWrapper`.
 
-### `mergeJoin(streamA, streamB, options)` / `joinBy` — key-based sorted join (planned)
+### `join` / `leftJoin` / `fullJoin` — key-based sorted join (shipped)
 
-SQL-style join of two sorted streams. **Pre-condition:** both inputs are sorted by the join key. Walks both via `stream-join`'s `select` + `sortedInsert(byKey)`; emits combined rows when keys match.
+Key-based join of two or more sorted streams, at `src/sorted/{join,left-join,full-join}.js` (re-exported from the index). **Pre-condition:** every input is sorted by its key; an out-of-order input throws at runtime. Closes the long-standing user request on `stream-join` for "join two large feeds by ID."
 
-**Options:**
+**Inputs** are a **named map** of descriptors — `{dept: {input, key}, emp: {input, key}}` — where `key` extracts the join key (default identity) and the map key names the input both on input and in the result. Each descriptor also takes `optional?: boolean`.
 
-- `keyFn?: (item) => key` (or `keyA` / `keyB` if the two sides use different field names).
-- `compareKey?: (a, b) => number` — defaults to default comparison.
-- `combine?: (rowA, rowB) => merged` — defaults to `{...rowA, ...rowB}`.
-- `variant?: 'inner' | 'left' | 'right' | 'full'` — default `'inner'`. Non-matches emit a row with `null` on the missing side for `left`/`right`/`full`, skipped for `inner`.
+**Options:** `compareKey` **or** `lessKey` (default natural order; composite/tuple keys need an explicit comparator); `combine?: (bag) => row` building each output from the named bag `{name: row | null}` (default returns the bag; returning `undefined` drops the combination); `maxGroupSize?: number` guarding a Cartesian blow-up.
 
-Closes the long-standing user request on `stream-join` for "join two large feeds by ID."
+**Semantics:** inner by default (a row emits only when every required input has the key); equal keys form a Cartesian product (SQL semantics). `optional: true` null-fills a side — `leftJoin` (first input required, rest optional) and `fullJoin` (all optional) are thin wrappers over the same engine; for arbitrary requiredness across N inputs, set `optional` per input on `join`.
+
+**Merge:** a custom group-aware walk — the deliberate D3 exception, like `polyphaseSort` — sharing the peekable reader at `src/reader.js`. A flat `select` + `sortedInsert` merge can't express equal-key grouping across inputs plus the Cartesian product, so the engine (`src/sorted/engine.js`) orchestrates directly: find the minimum key, gather each input's equal-key group, emit the product, advance.
+
+### Filters: `matching` / `unmatched` (planned)
+
+Filters emitting rows of the primary stream whose key is present (`matching`) or absent (`unmatched`) in the other — no `combine`, no product; whole rows pass. The former semi/anti joins; share the merge walk with the set ops.
+
+### `aggregate` (planned)
+
+Fold child streams under a master (or a key-derived group) by key — SQL-style group/aggregate. Per child: `init()` / `fold(acc, item)` / `finalize(acc)` (default collect-to-array). Multi-level nesting is done by composition (`join`-enrich → re-`sort` → flat `aggregate` per level), not a recursive descriptor.
 
 ### Set operations on sorted streams (planned)
 
 All take N sorted input streams (2 for `difference`) plus a comparator and emit a sorted output stream.
 
-- **`union(streams, lessFn)`** — sorted merge with **duplicate elimination across streams**: `{1,2,3} ∪ {2,3,4} = {1,2,3,4}` (distinct from plain `mergeSorted` which would emit `{1,2,2,3,3,4}`). Implemented as `select` + `sortedInsert` wrapping the picker with "skip if equal to last emitted."
+- **`union(streams, lessFn)`** — sorted merge with **duplicate elimination across streams**: `{1,2,3} ∪ {2,3,4} = {1,2,3,4}` (distinct from plain `merge` which would emit `{1,2,2,3,3,4}`). Implemented as `select` + `sortedInsert` wrapping the picker with "skip if equal to last emitted."
 - **`intersection(streams, lessFn)`** — emit values present in **all** streams. 2-way case: walk both, emit when keys match, advance the smaller side otherwise. k-way: extension via simultaneous key-tracking across streams.
 - **`difference(streamA, ...streamsB, lessFn)`** — emit values in `streamA` not present in any `streamsB[i]`.
 
-### `mergeSorted(streams, lessFn, options?)` — sorted merge without dedup (planned)
+### `merge(streams, lessFn, options?)` — sorted merge without dedup (planned)
 
-The suite's foundational operation: a k-way sorted merge of input streams under a `lessFn`. Same primitive as `stream-join/utils/merge-sorted`. Open decision (see vault `projects/stream-sorting/queue.md`): (a) move it here and have `stream-join` delete its copy; (b) leave `stream-join`'s copy as a back-compat alias re-exporting from `stream-sorting`; (c) accept the duplication. To be settled when `stream-sorting` reaches publish-readiness.
+The suite's foundational operation (was `mergeSorted`): a k-way sorted merge of input streams under a `lessFn`. Same primitive as `stream-join/utils/merge-sorted`. Open decision (see vault `projects/stream-sorting/queue.md`): (a) move it here and have `stream-join` delete its copy; (b) leave `stream-join`'s copy as a back-compat alias re-exporting from `stream-sorting`; (c) accept the duplication. To be settled when `stream-sorting` reaches publish-readiness.
 
 ## Helpers (`src/utils/`, planned)
 
@@ -125,10 +133,15 @@ src/index.js → src/wrapper.js             (shipped — protocol bases + consum
             → src/local-file-wrapper.js   (shipped — local FS, JSONL default)
             → src/sort.js                 (shipped — k-way merge sort)
             → src/polyphase-sort.js       (shipped — polyphase merge sort)
-            → src/merge-join.js, src/union.js, src/intersection.js,
-              src/difference.js, src/merge-sorted.js          (planned)
+            → src/sorted/join.js, src/sorted/left-join.js,
+              src/sorted/full-join.js     (shipped — join family)
+            → src/sorted/matching.js, src/sorted/unmatched.js, src/sorted/aggregate.js,
+              src/sorted/union.js, src/sorted/intersection.js,
+              src/sorted/difference.js, src/sorted/merge.js   (planned)
 
 src/sort.js, src/polyphase-sort.js → src/ordering.js  (shipped — shared comparator + stability)
+src/polyphase-sort.js, src/sorted/engine.js → src/reader.js   (shipped — peekable reader)
+src/sorted/{join,left-join,full-join}.js → src/sorted/engine.js  (shipped — prepare + runJoin)
                         ↓
                    stream-join (select, sortedInsert, pickFirst)   — k-way sort + ops
                         ↓
@@ -167,11 +180,15 @@ Errors propagate end-to-end with the original value preserved (same model as `st
 ```js
 import sort from 'stream-sorting/sort.js';
 import polyphaseSort from 'stream-sorting/polyphase-sort.js';
-import mergeJoin from 'stream-sorting/merge-join.js';
-import union from 'stream-sorting/union.js';
-import intersection from 'stream-sorting/intersection.js';
-import difference from 'stream-sorting/difference.js';
-import mergeSorted from 'stream-sorting/merge-sorted.js';
+import join from 'stream-sorting/sorted/join.js';
+import leftJoin from 'stream-sorting/sorted/left-join.js';
+import fullJoin from 'stream-sorting/sorted/full-join.js';
+
+// planned
+import union from 'stream-sorting/sorted/union.js';
+import intersection from 'stream-sorting/sorted/intersection.js';
+import difference from 'stream-sorting/sorted/difference.js';
+import merge from 'stream-sorting/sorted/merge.js';
 
 // Helper builders
 import byKey from 'stream-sorting/utils/by-key.js';
@@ -189,7 +206,7 @@ The default export from `import 'stream-sorting'` is TBD — likely `sort` since
 | [`stream-fork`](https://github.com/uhop/stream-fork)   | 1→N split / route / filter.                                                                                                                                |
 | **`stream-sorting`**                                   | **Anything that requires or preserves sortedness:** external merge sort, key-based join, set operations (union / intersection / difference), sorted merge. |
 
-Together, the family closes the billion-row pipeline story end-to-end in pure Node streams: sort each input with `stream-sorting`, `mergeJoin` the sorted streams, fork the output downstream.
+Together, the family closes the billion-row pipeline story end-to-end in pure Node streams: sort each input with `stream-sorting`, `join` the sorted streams, fork the output downstream.
 
 ## What is NOT here
 

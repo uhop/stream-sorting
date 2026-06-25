@@ -1,3 +1,5 @@
+export declare function defaultCompare<T>(a: T, b: T): number;
+
 export interface NormalizedComparator<T> {
   compare: (a: T, b: T) => number;
   lessFn: (a: T, b: T) => boolean;

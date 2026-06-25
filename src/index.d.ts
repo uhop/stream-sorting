@@ -7,3 +7,6 @@ export {
   type PolyphaseSortOptions,
   type PolyphaseSortProgressStats
 } from './polyphase-sort.js';
+export {default as join, type JoinInput, type JoinOptions} from './sorted/join.js';
+export {default as leftJoin} from './sorted/left-join.js';
+export {default as fullJoin} from './sorted/full-join.js';

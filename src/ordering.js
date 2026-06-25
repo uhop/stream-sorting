@@ -1,5 +1,7 @@
 // @ts-self-types="./ordering.d.ts"
 
+export const defaultCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
 export const normalizeComparator = ({compare, lessFn}, label) => {
   if (compare !== undefined && lessFn !== undefined) {
     throw new TypeError(`${label}: pass \`compare\` OR \`lessFn\`, not both`);

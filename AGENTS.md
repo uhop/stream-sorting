@@ -36,6 +36,7 @@ stream-sorting/
 ├── src/                      # Source code
 │   ├── index.js              # Entry point
 │   ├── index.d.ts
+│   ├── sorted/               # Operations on sorted streams (join, leftJoin, fullJoin, …)
 │   └── utils/                # Helpers users compose with main components
 ├── tests/                    # Test files (test-*.js using tape-six) + helpers.js
 ├── dev-docs/                 # Internal design notes (not in the published tarball)
@@ -56,12 +57,12 @@ stream-sorting/
 
 ## Critical rules
 
-- **Two runtime dependencies: `stream-chain` and `stream-join`.** `stream-chain` provides `readableFrom` (async-iterable → Readable). `stream-join` provides `select` + `sortedInsert` (the k-way merge primitives `sort` and the planned sorted-stream ops compose; `polyphaseSort` uses a custom merge). Never add other packages to `dependencies`; only `devDependencies` are otherwise allowed.
+- **Two runtime dependencies: `stream-chain` and `stream-join`.** `stream-chain` provides `readableFrom` (async-iterable → Readable). `stream-join` provides `mergeSorted` (built on `select` + `sortedInsert`), which `sort`'s k-way merge composes; `polyphaseSort` and the join family use custom merges instead (see below). Never add other packages to `dependencies`; only `devDependencies` are otherwise allowed.
 - **Node-only.** The package targets Node servers and CLIs. The disk-backed sort relies on `node:fs`, `node:os`, `node:path`. No web entry point; no browser tests.
 - **AsyncIterable in / AsyncIterable out.** Algorithms accept `AsyncIterable<T> | Iterable<T>` (Node Readables, Web ReadableStreams, generators, arrays all satisfy) and return `AsyncIterable<T>`. No `node:stream` or Web Streams types appear in the public surface — users convert at the boundary with `readableFrom(...)` / `ReadableStream.from(...)` / direct `for await`. See `dev-docs/initial.md` / the wrapper-protocol section in `ARCHITECTURE.md` for rationale.
 - **Backpressure must be handled correctly.** Async iteration is naturally backpressured (the producer pauses while the consumer awaits). Do not add buffering on top of input beyond the sort's run-buffer.
 - **Sort is disk-backed by default.** The external-merge-sort engine writes sorted runs to on-disk files (chunk size capped by a configurable in-memory budget), then k-way-merges them. The design point is "sort a billion records on a laptop without OOMing"; in-memory-only and sliding-window-approximate strategies were considered and rejected during design.
-- **k-way merge reuses `stream-join`.** The `sort` merge phase composes `select` + `sortedInsert(lessFn)` from `stream-join` — do not reimplement. (`polyphaseSort` is the deliberate exception: its series-aware merge is hand-written per D3.)
+- **k-way merge reuses `stream-join`.** The `sort` merge phase composes `select` + `sortedInsert(lessFn)` from `stream-join` (via `mergeSorted`) — do not reimplement. `polyphaseSort` (series-aware) and the join family (equal-key grouping + Cartesian product) are the deliberate D3 exceptions: their merges are hand-written, sharing one peekable reader at `src/reader.js`, because a flat merge can't express sub-stream structure.
 - **Comparator API follows `Array.prototype.sort`.** Comparators are `(a, b) => number`: negative if `a < b`, positive if `a > b`, zero if equal. Helpers may provide `lessFn = (a, b) => bool` adapters where the underlying primitive expects one.
 - **Do not modify or delete test expectations** without understanding why they changed.
 - **Do not add comments or remove comments** unless explicitly asked.
@@ -76,14 +77,14 @@ The package is mid-build. **Implemented:**
 - Two built-in wrappers: `MemoryWrapper` (array-backed; for tests + small data) and `LocalFileWrapper` (local FS, JSONL by default, user-overridable `serialize` / `deserialize`, no default `tmpDir` per the Linux-tmpfs footgun).
 - **`sort(input, options)`** — external merge sort. `input` is `AsyncIterable<T> | Iterable<T>`; returns `AsyncIterable<T>`. Pulls items into `batchSize`-bounded buffers, sorts via `Array.prototype.sort`, drains to a wrapper, repeats; once input is exhausted, k-way-merges runs via `stream-join`'s `mergeSorted`. In-memory fast path when input ≤ `batchSize`. Accept `compare` OR `lessFn` (D5). Accept `tmpDir` OR `createWrapper` (one-line `LocalFileWrapper` convenience vs explicit factory). `stable: true` default (D10), `onProgress(stats)`, `keepTempFiles`.
 - **`polyphaseSort(input, options)`** — polyphase merge sort (fixed file budget); same API shape as `sort` with a custom series-aware merge (D2/D3). Storage: `files` (explicit wrappers, `K = files.length ≥ 3`) OR `k` + (`tmpDir` | `createWrapper`), default `k = 4`. Distributes runs across `K − 1` files in a Fibonacci distribution (virtual runs pad the shortfall), then merges in role-rotating phases. In-memory fast path like `sort`.
+- **`join` / `leftJoin` / `fullJoin`** (`src/sorted/{join,left-join,full-join}.js`, re-exported from the index) — key-based join of two or more sorted streams. Inputs are a **named map** `{name: {input, key?, optional?}}` (`key` defaults to identity). `join` is an inner join (every required input must have the key); `optional: true` null-fills a side, and `leftJoin` (first input required, rest optional) / `fullJoin` (all optional) are thin wrappers that set it. Equal keys form a Cartesian product. `combine(bag)` builds each row from the named bag of matched rows (`{name: row | null}`); the default returns the bag, returning `undefined` drops the combination. `compareKey` OR `lessKey` (default natural order; composite/tuple keys need an explicit comparator), optional `maxGroupSize` guard. `AsyncIterable<T> | Iterable<T>` in → `AsyncGenerator` out; validates synchronously then generates; throws on an out-of-order input. Custom group-aware merge (the D3 exception), sharing the peekable reader at `src/reader.js`.
 
 Planned next:
 
-- **`mergeJoin(streamA, streamB, options)`** / **`joinBy`** — SQL-style key-based join of two sorted streams. Walks both via stream-join's `select` + `sortedInsert(byKey)`; emits combined rows on key match; `null` / skip per variant (`inner` / `left` / `right` / `full`).
-- **`union(streams, lessFn)`** — sorted merge with duplicate elimination across all inputs.
-- **`intersection(streams, lessFn)`** — values present in ALL input streams.
-- **`difference(streamA, ...streamsB, lessFn)`** — values in `streamA` not in any `streamsB[i]`.
-- **`mergeSorted(streams, lessFn, options?)`** — sorted merge without dedup. Logically the foundational operation in the suite; may eventually subsume the copy that currently lives in `stream-join/utils/merge-sorted` (open decision; see vault `projects/stream-sorting/queue.md`).
+- **`matching` / `unmatched`** — filters emitting rows of the primary stream whose key is present / absent in the other (the former semi/anti joins; share the merge walk with the set-ops).
+- **`aggregate`** — fold child streams under a master (or a key-derived group) by key; covers SQL-style group/aggregate, with multi-level nesting done by composition (join-enrich → re-sort → aggregate).
+- **`union` / `intersection` / `difference`** — set operations on sorted streams by value (`lessFn`).
+- **`merge`** — k-way sorted merge without dedup (was `mergeSorted`); may subsume the copy in `stream-join/utils/merge-sorted` (open decision; see vault `projects/stream-sorting/queue.md`).
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module map and dependency graph as components land.
 

@@ -5,6 +5,7 @@ import {join} from 'node:path';
 
 import LocalFileWrapper from './local-file-wrapper.js';
 import {normalizeComparator, validateInput, makeStability} from './ordering.js';
+import {DONE, makeReader} from './reader.js';
 
 const DEFAULT_BATCH_SIZE = 10000;
 const DEFAULT_K = 4;
@@ -74,36 +75,6 @@ const nextLevel = c => {
   for (let i = 0; i < n - 1; ++i) next[i] = c[0] + c[i + 1];
   next[n - 1] = c[0];
   return next;
-};
-
-const DONE = Symbol('done');
-
-const makeReader = iterable => {
-  const it = iterable[Symbol.asyncIterator]();
-  let buf = DONE;
-  let buffered = false;
-  const peek = async () => {
-    if (!buffered) {
-      const r = await it.next();
-      buf = r.done ? DONE : r.value;
-      buffered = true;
-    }
-    return buf;
-  };
-  const take = async () => {
-    const v = await peek();
-    buffered = false;
-    buf = DONE;
-    return v;
-  };
-  const dispose = async () => {
-    if (it.return) {
-      try {
-        await it.return();
-      } catch {}
-    }
-  };
-  return {peek, take, dispose};
 };
 
 async function* mergeStep(contributors, runCompare) {
