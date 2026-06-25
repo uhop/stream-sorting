@@ -15,7 +15,7 @@ Runtime dependencies: [`stream-chain`](https://www.npmjs.com/package/stream-chai
 
 ## Status
 
-**Scaffold phase.** The package layout, conventions, and intended API surface are in place; component implementations land incrementally. See the [wiki](https://github.com/uhop/stream-sorting/wiki) for current state and `ARCHITECTURE.md` for the design.
+**Early development.** The object-stream wrapper protocol and both sort algorithms (`sort`, `polyphaseSort`) are implemented; the sorted-stream operations (`mergeJoin`, set ops, `mergeSorted`) are planned. See the [wiki](https://github.com/uhop/stream-sorting/wiki) for usage and `ARCHITECTURE.md` for the design.
 
 ## Installation
 
@@ -23,48 +23,29 @@ Runtime dependencies: [`stream-chain`](https://www.npmjs.com/package/stream-chai
 npm i stream-sorting
 ```
 
-## Planned API
+## API
 
-### `sort(stream, options)` — external merge sort
+Object-mode in, object-mode out: every operation accepts `AsyncIterable<T> | Iterable<T>` and returns an `AsyncIterable<T>`. Options, examples, and design notes live in the [wiki](https://github.com/uhop/stream-sorting/wiki).
 
 ```js
 import sort from 'stream-sorting/sort.js';
 
-const sorted = sort(input, {
-  compare: (a, b) => a.id - b.id,
-  memoryBudget: 64 * 1024 * 1024,
-  tmpDir: '/var/sort',
-  cleanup: true
-});
-
-sorted.pipe(downstream);
+for await (const item of sort(input, {compare: (a, b) => a.id - b.id, tmpDir: '/var/sort'})) {
+  // items in ascending id order
+}
 ```
 
-Items accumulate in an in-memory buffer up to `memoryBudget`, are sorted with `Array.prototype.sort(compare)`, and flushed to a run file under `tmpDir`. The runs are then k-way-merged streaming-style. Comparator semantics match `Array.prototype.sort` — `(a, b) => number`, negative if `a < b`.
+### Implemented
 
-### `mergeJoin(streamA, streamB, options)` / `joinBy`
+- **[`sort`](https://github.com/uhop/stream-sorting/wiki/sort)** — disk-backed external (k-way) merge sort. The headline operation.
+- **[`polyphaseSort`](https://github.com/uhop/stream-sorting/wiki/polyphaseSort)** — polyphase merge sort; a fixed file budget, for bounded or heterogeneous storage.
+- **Wrapper protocol** — [`ObjectStreamWrapper`](https://github.com/uhop/stream-sorting/wiki/ObjectStreamWrapper) with built-in [`MemoryWrapper`](https://github.com/uhop/stream-sorting/wiki/MemoryWrapper) and [`LocalFileWrapper`](https://github.com/uhop/stream-sorting/wiki/LocalFileWrapper). The storage abstraction the sorts read and write through, so a sort can exceed any single disk.
 
-```js
-import mergeJoin from 'stream-sorting/merge-join.js';
+### Planned
 
-const joined = mergeJoin(left, right, {
-  keyFn: row => row.id,
-  combine: (a, b) => ({...a, ...b}),
-  variant: 'inner' // 'inner' | 'left' | 'right' | 'full'
-});
-```
-
-**Pre-condition:** both inputs are sorted by the join key. Walks both streams via `stream-join`'s `select` + `sortedInsert(byKey)`; emits combined rows when keys match.
-
-### Set operations on sorted streams
-
-- `union(streams, lessFn)` — sorted merge with cross-stream deduplication. `{1,2,3} ∪ {2,3,4} = {1,2,3,4}`.
-- `intersection(streams, lessFn)` — values present in all input streams.
-- `difference(streamA, streamsB, lessFn)` — values in `streamA` not in any `streamsB[i]`.
-
-### `mergeSorted(streams, lessFn, options?)`
-
-K-way sorted merge without deduplication. The suite's foundational operation.
+- **`mergeJoin`** / **`joinBy`** — SQL-style key-based join of sorted streams (inner / left / right / full).
+- **`union`** / **`intersection`** / **`difference`** — set operations on sorted streams.
+- **`mergeSorted`** — k-way sorted merge without deduplication; the suite's foundational op.
 
 ## Family
 

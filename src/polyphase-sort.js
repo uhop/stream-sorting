@@ -76,23 +76,54 @@ const nextLevel = c => {
   return next;
 };
 
-async function* mergeContributors(contributors, readItem, runCompare) {
-  for (const c of contributors) {
-    c.head = await readItem(c.fileIdx);
-    c.active = true;
-  }
-  let active = contributors.length;
-  while (active > 0) {
+const DONE = Symbol('done');
+
+const makeReader = iterable => {
+  const it = iterable[Symbol.asyncIterator]();
+  let buf = DONE;
+  let buffered = false;
+  const peek = async () => {
+    if (!buffered) {
+      const r = await it.next();
+      buf = r.done ? DONE : r.value;
+      buffered = true;
+    }
+    return buf;
+  };
+  const take = async () => {
+    const v = await peek();
+    buffered = false;
+    buf = DONE;
+    return v;
+  };
+  const dispose = async () => {
+    if (it.return) {
+      try {
+        await it.return();
+      } catch {}
+    }
+  };
+  return {peek, take, dispose};
+};
+
+async function* mergeStep(contributors, runCompare) {
+  for (const c of contributors) c.activeRun = (await c.reader.peek()) !== DONE;
+  while (true) {
     let best = null;
+    let bestHead = DONE;
     for (const c of contributors) {
-      if (c.active && (best === null || runCompare(c.head, best.head) < 0)) best = c;
+      if (!c.activeRun) continue;
+      const head = await c.reader.peek();
+      if (best === null || runCompare(head, bestHead) < 0) {
+        best = c;
+        bestHead = head;
+      }
     }
-    yield best.head;
-    if (--best.remaining > 0) best.head = await readItem(best.fileIdx);
-    else {
-      best.active = false;
-      --active;
-    }
+    if (best === null) break;
+    const item = await best.reader.take();
+    yield item;
+    const next = await best.reader.peek();
+    if (next === DONE || runCompare(next, item) < 0) best.activeRun = false;
   }
 }
 
@@ -151,14 +182,16 @@ async function* runPolyphaseSort({
 
   let created = false;
   let wrappers = [];
-  let queues = [];
+  let real = [];
+  let dummy = [];
   let writers = [];
   let readers = [];
   const ensureWrappers = () => {
     if (created) return;
     created = true;
     wrappers = makeWrappers();
-    queues = wrappers.map(() => []);
+    real = wrappers.map(() => 0);
+    dummy = wrappers.map(() => 0);
     writers = wrappers.map(() => null);
     readers = wrappers.map(() => null);
   };
@@ -180,7 +213,7 @@ async function* runPolyphaseSort({
       files: created
         ? wrappers.map((_, i) => ({
             role: i === outputFile ? 'output' : readers[i] ? 'input' : 'idle',
-            runsRemaining: queues[i].length
+            runsRemaining: real[i] + dummy[i]
           }))
         : []
     });
@@ -189,11 +222,7 @@ async function* runPolyphaseSort({
   const disposeReader = async i => {
     const r = readers[i];
     readers[i] = null;
-    if (r && r.return) {
-      try {
-        await r.return();
-      } catch {}
-    }
+    if (r) await r.dispose();
   };
 
   const cleanup = async () => {
@@ -212,9 +241,9 @@ async function* runPolyphaseSort({
     const placeRun = async sortedBuffer => {
       ensureWrappers();
       let idx = 0;
-      let bestDef = c[0] - queues[0].length;
+      let bestDef = c[0] - real[0];
       for (let i = 1; i < inputCount; ++i) {
-        const def = c[i] - queues[i].length;
+        const def = c[i] - real[i];
         if (def > bestDef) {
           bestDef = def;
           idx = i;
@@ -223,9 +252,9 @@ async function* runPolyphaseSort({
       if (bestDef <= 0) {
         c = nextLevel(c);
         idx = 0;
-        bestDef = c[0] - queues[0].length;
+        bestDef = c[0] - real[0];
         for (let i = 1; i < inputCount; ++i) {
-          const def = c[i] - queues[i].length;
+          const def = c[i] - real[i];
           if (def > bestDef) {
             bestDef = def;
             idx = i;
@@ -234,7 +263,7 @@ async function* runPolyphaseSort({
       }
       if (writers[idx] === null) writers[idx] = wrappers[idx].openWriter();
       await writers[idx].writeAll(sortedBuffer);
-      queues[idx].push(sortedBuffer.length);
+      ++real[idx];
       itemsWritten += sortedBuffer.length;
       emitProgress('pre-sort');
     };
@@ -274,64 +303,54 @@ async function* runPolyphaseSort({
 
     let realRunsRemaining = 0;
     for (let i = 0; i < inputCount; ++i) {
-      const dummies = c[i] - queues[i].length;
-      virtualSeries += dummies;
-      realRunsRemaining += queues[i].length;
-      if (dummies > 0) queues[i] = new Array(dummies).fill(0).concat(queues[i]);
+      dummy[i] = c[i] - real[i];
+      virtualSeries += dummy[i];
+      realRunsRemaining += real[i];
     }
-
-    const readItem = async fileIdx => {
-      const res = await readers[fileIdx].next();
-      if (res.done) throw new Error('polyphaseSort: unexpected end of run while merging');
-      return res.value;
-    };
 
     while (true) {
       const inputs = [];
       for (let i = 0; i < K; ++i) if (i !== outputFile) inputs.push(i);
 
       for (const i of inputs) {
-        if (readers[i] === null && queues[i].some(len => len > 0)) {
-          readers[i] = wrappers[i].openReader()[Symbol.asyncIterator]();
-        }
+        if (readers[i] === null && real[i] > 0) readers[i] = makeReader(wrappers[i].openReader());
       }
 
       let steps = Infinity;
-      for (const i of inputs) if (queues[i].length < steps) steps = queues[i].length;
+      for (const i of inputs) {
+        const total = real[i] + dummy[i];
+        if (total < steps) steps = total;
+      }
       if (!Number.isFinite(steps)) steps = 0;
 
       let outputWriter = null;
       for (let s = 0; s < steps; ++s) {
         const contributors = [];
         for (const i of inputs) {
-          const len = queues[i].shift();
-          if (len > 0) contributors.push({fileIdx: i, remaining: len});
+          if (dummy[i] > 0) --dummy[i];
+          else {
+            --real[i];
+            contributors.push({reader: readers[i]});
+          }
         }
 
         if (contributors.length === 0) {
-          queues[outputFile].push(0);
+          ++dummy[outputFile];
           continue;
         }
 
         if (realRunsRemaining === contributors.length) {
-          for await (const env of mergeContributors(contributors, readItem, runCompare))
-            yield unwrap(env);
+          for await (const env of mergeStep(contributors, runCompare)) yield unwrap(env);
           return;
         }
 
         if (outputWriter === null) outputWriter = wrappers[outputFile].openWriter();
-        let outLen = 0;
-        for await (const env of mergeContributors(contributors, readItem, runCompare)) {
+        for await (const env of mergeStep(contributors, runCompare)) {
           await outputWriter.write(env);
-          ++outLen;
+          ++itemsWritten;
         }
-        queues[outputFile].push(outLen);
-        itemsWritten += outLen;
+        ++real[outputFile];
         realRunsRemaining -= contributors.length - 1;
-
-        for (const contributor of contributors) {
-          if (queues[contributor.fileIdx].length === 0) await disposeReader(contributor.fileIdx);
-        }
       }
 
       if (outputWriter !== null) await outputWriter.end();
@@ -341,12 +360,13 @@ async function* runPolyphaseSort({
 
       let emptied = -1;
       for (const i of inputs) {
-        if (queues[i].length === 0) {
+        if (real[i] + dummy[i] === 0) {
           emptied = i;
           break;
         }
       }
       if (emptied === -1) throw new Error('polyphaseSort: merge failed to reduce runs');
+      await disposeReader(emptied);
       outputFile = emptied;
     }
   } finally {

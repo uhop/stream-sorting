@@ -14,11 +14,11 @@
 - **Object mode is always on.** Every output Readable forces `objectMode: true`.
 - **Backpressure must be handled correctly** — yield through `readableFrom`; no buffering above the sort's run-buffer.
 - **Sort is disk-backed by default.** External merge sort writes sorted runs to a temp directory; k-way-merges them on output. In-memory-only and sliding-window-approximate strategies were considered and rejected.
-- **k-way merge reuses `stream-join`.** Compose `select` + `sortedInsert(lessFn)` from `stream-join`; do not reimplement.
+- **k-way merge reuses `stream-join`.** The `sort` merge composes `select` + `sortedInsert(lessFn)` from `stream-join`; do not reimplement. `polyphaseSort` is the exception — its series-aware merge is hand-written.
 - **Comparator API follows `Array.prototype.sort`.** `(a, b) => number`; negative if `a < b`, positive if `a > b`, zero if equal.
 - **Do not modify or delete test expectations** without understanding why they changed.
 - **Do not add comments or remove comments** unless explicitly asked.
-- **Keep `.js` and `.d.ts` in sync.** Every `.js` carries `// @ts-self-types="./X.d.ts"` at the top; JSDoc lives in the `.d.ts` only.
+- **Keep `.js` and `.d.ts` in sync.** Every `.js` carries `// @ts-self-types="./X.d.ts"` at the top. The `.d.ts` holds signatures + a one-line purpose + an `@see` wiki link per export; all descriptions, options, and examples live in the wiki — never in `.d.ts` or `.js`.
 - **Helpers under `src/utils/`.** Main components at `src/` root.
 
 ## Code style
@@ -29,9 +29,14 @@
 
 ## Architecture quick reference
 
-Planned components (in scaffold phase):
+Implemented:
 
-- `sort(stream, options)` — disk-backed external merge sort; `compare`, `memoryBudget`, `tmpDir`.
+- Wrapper protocol (`ObjectStreamWrapper` + `ItemWriter` + `consume`) with built-in `MemoryWrapper` and `LocalFileWrapper` — pluggable backing storage.
+- `sort(input, options)` — disk-backed external (k-way) merge sort. `compare` OR `lessFn`; `tmpDir` OR `createWrapper`; `batchSize`, `stable`, `onProgress`, `keepTempFiles`.
+- `polyphaseSort(input, options)` — polyphase merge sort (fixed file budget; custom series-aware merge). `files` OR `k` + (`tmpDir` | `createWrapper`), default `k = 4`; same other options as `sort`.
+
+Planned:
+
 - `mergeJoin(streamA, streamB, options)` / `joinBy` — SQL-style key join of sorted streams; variants `inner` / `left` / `right` / `full`.
 - `union` / `intersection` / `difference` — set operations on sorted streams.
 - `mergeSorted` — sorted merge without dedup; the suite's foundational op.

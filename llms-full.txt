@@ -4,7 +4,7 @@ External merge sort and sorted-stream operations for object-mode Node `Readable`
 
 ## Status
 
-The package is in scaffold phase. The wrapper protocol and two built-in wrappers (`MemoryWrapper`, `LocalFileWrapper`) have shipped (see the next section). Components below marked **(planned)** are still unimplemented. The shape captured here is the design target — implementation lands incrementally per `projects/stream-sorting/queue.md` in Eugene's vault.
+The package is mid-build. The wrapper protocol, two built-in wrappers (`MemoryWrapper`, `LocalFileWrapper`), and both sort algorithms (`sort`, `polyphaseSort`) have shipped. Components below marked **(planned)** are still unimplemented. The shape captured here is the design target — implementation lands incrementally per `projects/stream-sorting/queue.md` in Eugene's vault.
 
 ## Object-stream wrapper protocol (shipped)
 
@@ -35,7 +35,7 @@ class ObjectStreamWrapper<T = unknown> {
 
 Both are real JS classes. `extends ItemWriter` gives subclasses the default `writeAll` loop (and `instanceof` works for runtime checks); `extends ObjectStreamWrapper` is a marker that documents intent. Plain objects matching the shape also satisfy the contract — TypeScript accepts either, JavaScript runs either.
 
-**Mode-exclusive.** A wrapper is `idle`, `writing`, or `reading` at any moment. `openWriter()` while writing re-opens and discards previous content. `openReader()` while writing throws — call `close()` first. `openWriter()` while reading throws. Both built-in algorithms (`sort`, `polyphase-sort`) write-then-read; they never use both modes concurrently. Custom wrappers MUST honor these rules.
+**Mode-exclusive.** A wrapper is `idle`, `writing`, or `reading` at any moment. `openWriter()` while writing re-opens and discards previous content. `openReader()` while writing throws — call `close()` first. `openWriter()` while reading throws. Both built-in algorithms (`sort`, `polyphaseSort`) write-then-read; they never use both modes concurrently. Custom wrappers MUST honor these rules.
 
 **Cleanup via `return()`.** The iterator returned from `openReader()[Symbol.asyncIterator]()` implements `return()`. `for await ... break`, thrown exceptions in the loop body, and explicit `iterator.return()` all release per-read resources automatically — no manual close needed. `wrapper.close()` is the coarse-grained escape hatch for sessions abandoned without iterating, or as defensive cleanup before `delete()`.
 
@@ -181,6 +181,48 @@ ReadableStream.from(sort(input, opts)).pipeTo(webDst)               // Web Reada
 - Comparator throws during sort or merge: error propagates to the consumer; cleanup runs.
 - Input stream errors: error propagates; cleanup runs.
 
+### `polyphaseSort(input, options)` — polyphase merge sort (shipped)
+
+Fixed-file-budget companion to `sort`. Uses exactly `K` files regardless of input size — for bounded file budgets, or storage spread across drives / buckets / machines (one wrapper per backend). Same in/out contract as `sort`: `input` is `AsyncIterable<T> | Iterable<T>`, returns an `AsyncIterable<T>`.
+
+**Signature:**
+
+```ts
+function polyphaseSort<T>(
+  input: AsyncIterable<T> | Iterable<T>,
+  options:
+    | {compare: (a: T, b: T) => number}
+    | {lessFn: (a: T, b: T) => boolean}
+    & (
+        | {files: ObjectStreamWrapper<unknown>[]}
+        | {k?: number; tmpDir: string}
+        | {k?: number; createWrapper: (fileIndex: number) => ObjectStreamWrapper<unknown>}
+      )
+    & {
+        batchSize?: number;       // default 10000
+        stable?: boolean;          // default true
+        onProgress?: (stats: PolyphaseSortProgressStats) => void;
+        keepTempFiles?: boolean;   // default false
+      }
+): AsyncGenerator<T, void, void>;
+```
+
+**Parameters:** `compare` / `lessFn`, `batchSize`, `stable`, `keepTempFiles` behave exactly as in `sort`. Storage is one of:
+
+- `files` — explicit wrappers, one per file. `K = files.length` (minimum 3). User-owned: `close()`d at the end, not deleted.
+- `k` (default 4, minimum 3) with `tmpDir` — `k` built-in `LocalFileWrapper`s under `tmpDir` (no default — tmpfs footgun).
+- `k` with `createWrapper: (fileIndex) => ObjectStreamWrapper` — factory for the `k` wrappers.
+
+`onProgress(stats)` reports `{phase: 'pre-sort' | 'merge' | 'final-merge', itemsRead, itemsWritten, passesComplete, virtualSeries, files: [{role, runsRemaining}]}`.
+
+**Distribution.** Pre-sorts input into runs and writes them across the `K − 1` input files toward a perfect generalized-Fibonacci distribution; the shortfall (when the real run count is not perfect) is tracked as virtual (empty) runs.
+
+**Merge phases.** Repeatedly merges the `K − 1` inputs into the one output file via a hand-written series-aware merge — a run ends at a sort-order break (`lessFn`). When an input drains it becomes the next output and the old output rejoins the inputs. Run counts are kept arithmetically (clean Fibonacci); accidentally adjacent in-order runs simply read back as one longer run, and EOF corrects the bookkeeping. The final merge (every file down to ≤ 1 run) streams straight to the caller. In-memory fast path like `sort` when `input ≤ batchSize`.
+
+**Stability.** Same `{item, tag}` envelope as `sort` — essential here because items are reshuffled across passes. The merge is hand-written, not `stream-join`'s `mergeSorted`.
+
+**Why polyphase vs k-way.** Prefer `sort` on modern SSDs (single-pass merge, cheap file handles). Prefer `polyphaseSort` when the number of open files must be bounded, or storage is spread across expensive / remote backends.
+
 ### `mergeJoin(streamA, streamB, options)` / `joinBy` — key-based join of sorted streams (planned)
 
 ```ts
@@ -291,8 +333,8 @@ union([feed1, feed2, feed3], lessByKey).pipe(output);
 
 ## Performance notes
 
-- The `memoryBudget` knob is a **soft** cap — actual memory varies with item size. Tune for the workload.
-- The k-way merge cost is `O(N log k)` where `N` is total items and `k` is the number of runs. Smaller `memoryBudget` → more runs → log factor grows; large `memoryBudget` → fewer runs but higher peak RAM. Default is a starting point, not a prescription.
+- The `batchSize` knob is a **soft** cap — actual memory varies with item size. Tune for the workload.
+- The k-way merge cost is `O(N log k)` where `N` is total items and `k` is the number of runs. Smaller `batchSize` → more runs → log factor grows; larger `batchSize` → fewer runs but higher peak RAM. Default is a starting point, not a prescription. `polyphaseSort` instead bounds the file count to `K` and pays more passes (~log_φ(R)).
 - Disk I/O dominates for cardinalities that overflow RAM. SSDs are the assumed deployment target; spinning disks work but slower.
 - The `serialize` / `deserialize` hooks are the per-item hot path on disk-backed runs; for high-throughput pipelines, custom binary encodings can outperform the default JSON.
 

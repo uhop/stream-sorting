@@ -365,3 +365,55 @@ test('polyphaseSort: randomized numeric with duplicates and negatives', async t 
     t.deepEqual(out, expected, `trial ${trial} n=${n} k=${k} batchSize=${batchSize}`);
   }
 });
+
+test('polyphaseSort: already-sorted input (maximal run coalescing)', async t => {
+  for (const k of [3, 4, 5, 7]) {
+    for (const batchSize of [1, 2, 7]) {
+      const n = 120;
+      const input = [];
+      for (let i = 0; i < n; ++i) input.push(i);
+      const {out} = await sortInMem(input, {compare: asc, batchSize, k});
+      const expected = input.slice();
+      t.deepEqual(out, expected, `sorted k=${k} batchSize=${batchSize}`);
+    }
+  }
+});
+
+test('polyphaseSort: reverse-sorted input (no coalescing)', async t => {
+  for (const k of [3, 4, 5, 7]) {
+    const n = 120;
+    const input = [];
+    for (let i = n; i > 0; --i) input.push(i);
+    const {out} = await sortInMem(input, {compare: asc, batchSize: 4, k});
+    const expected = input.slice().sort(asc);
+    t.deepEqual(out, expected, `reverse k=${k}`);
+  }
+});
+
+test('polyphaseSort: all-equal keys stay stable through coalescing', async t => {
+  for (const k of [3, 4, 5]) {
+    const items = [];
+    for (let i = 0; i < 80; ++i) items.push({key: 7, i});
+    const {out} = await sortInMem(items, {compare: (a, b) => a.key - b.key, batchSize: 6, k});
+    t.equal(out.length, 80);
+    for (let j = 0; j < out.length; ++j) t.equal(out[j].i, j, `all-equal stable k=${k} at ${j}`);
+  }
+});
+
+test('polyphaseSort: forced adjacent in-order output runs (accidental-coalesce path)', async t => {
+  // Disjoint ascending blocks per batch so merged output runs concatenate in order
+  // and read back as a single coalesced run — exercises EOF→phantom handling.
+  const input = [];
+  for (let block = 0; block < 12; ++block) {
+    for (let j = 0; j < 5; ++j) input.push(block * 100 + j);
+  }
+  const shuffled = input.slice();
+  for (let i = shuffled.length - 1; i > 0; --i) {
+    const r = (i * 2654435761) % (i + 1);
+    const t2 = shuffled[i];
+    shuffled[i] = shuffled[r];
+    shuffled[r] = t2;
+  }
+  const {out} = await sortInMem(shuffled, {compare: asc, batchSize: 5, k: 4});
+  t.deepEqual(out, input, 'sorted despite coalescing');
+});

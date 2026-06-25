@@ -4,7 +4,7 @@
 
 **Node-only.** The package targets server / CLI contexts. The disk-backed sort relies on `node:fs`, `node:os`, `node:path`; there is no web entry point and no browser test surface. Sorting at billion-record scale is a server problem.
 
-The package is currently in scaffold phase. The wrapper protocol and its two built-in implementations have shipped (see below); the algorithms that compose them are still **(planned)**.
+The package is mid-build. The wrapper protocol, its two built-in implementations, and both sort algorithms (`sort`, `polyphaseSort`) have shipped (see below); the sorted-stream operations that build on them are still **(planned)**.
 
 ## Project layout
 
@@ -55,24 +55,34 @@ Both are real JS classes — subclass them for `instanceof` checks and to inheri
 
 **`consume(writer, source)` helper** (at `src/wrapper.js`, alongside the bases): one-shot convenience equivalent to `await writer.writeAll(source); await writer.end();`. Use when you have all the items in hand and don't need imperative control over per-item writes.
 
-## Main components (planned)
+## Main components
 
-### `sort(stream, options)` — external merge sort
+### `sort(input, options)` — external merge sort (shipped)
 
-**Strategy:** disk-backed external merge sort.
+**Strategy:** disk-backed external (k-way) merge sort. `input` is `AsyncIterable<T> | Iterable<T>`; the result is an `AsyncIterable<T>`.
 
-1. **Run-formation phase.** Pull items from the input stream into an in-memory buffer of size ≤ `memoryBudget`. When the buffer is full (or input ends), sort it in memory via `Array.prototype.sort(compare)` and flush it to a file under `tmpDir` as a single sorted run.
-2. **k-way-merge phase.** Open all run files as object-mode Readable streams. Compose `select` + `sortedInsert(lessFn)` from [`stream-join`](https://github.com/uhop/stream-join) to produce the merged sorted output. Yield through `readableFrom` from [`stream-chain`](https://github.com/uhop/stream-chain) so downstream backpressure flows naturally.
+1. **Run-formation phase.** Pull items into an in-memory buffer of up to `batchSize` items. When full (or input ends), sort via `Array.prototype.sort(compare)` and flush to a fresh wrapper as one sorted run.
+2. **k-way-merge phase.** K-way-merge all run wrappers via [`stream-join`](https://github.com/uhop/stream-join)'s `mergeSorted` (`select` + `sortedInsert(lessFn)` + `pickFirst`) and yield in order. In-memory fast path: when the whole input fits in one batch it is sorted in memory and emitted directly — no wrapper, no disk.
 
-**Why disk-backed.** The design point is "sort a billion records on a laptop without OOMing." Two alternatives floated during design were rejected: an in-memory-only buffer (does not scale), and a sliding-window approximate sort (does not actually sort — items can come out unordered when the window is too small for the input's disorder).
+**Why disk-backed.** The design point is "sort a billion records on a laptop without OOMing." Two alternatives floated during design were rejected: an in-memory-only buffer (does not scale), and a sliding-window approximate sort (does not actually sort).
 
 **Options:**
 
-- `compare: (a, b) => number` — comparator, semantics identical to `Array.prototype.sort`.
-- `memoryBudget?: number` — soft cap on in-memory items per run (heuristic, since item size varies). Default TBD; likely ~64 MB equivalent.
-- `tmpDir?: string` — directory for run files. **Required** for `LocalFileWrapper` — no default (Linux `/tmp` is commonly tmpfs / RAM-backed and would defeat the algorithm's whole purpose). See `dev-docs/initial.md` for the rationale.
-- `cleanup?: boolean` — delete run files after the merge ends or errors. Default: `true`.
-- `serialize?: (item) => Buffer | string` / `deserialize?: (chunk) => item` — on-disk encoding hooks. Default: JSON line-delimited.
+- `compare: (a, b) => number` **or** `lessFn: (a, b) => boolean` — comparator (`compare` semantics identical to `Array.prototype.sort`).
+- `tmpDir?: string` **or** `createWrapper?: (runIndex) => ObjectStreamWrapper` — storage. `tmpDir` uses the built-in `LocalFileWrapper` (one run file each); `createWrapper` supplies custom backing storage. `tmpDir` has **no default** (Linux `/tmp` is commonly tmpfs / RAM-backed and would defeat the algorithm).
+- `batchSize?: number` — soft cap on in-memory items per run. Default 10000.
+- `stable?: boolean` — keep input order for equal items. Default `true` (internal sequence tag, stripped before emit).
+- `onProgress?: (stats) => void` — progress at run / merge boundaries.
+- `keepTempFiles?: boolean` — keep run files instead of deleting them. Default `false`.
+
+### `polyphaseSort(input, options)` — polyphase merge sort (shipped)
+
+The fixed-file-budget companion to `sort`: it uses exactly `K` files regardless of input size, which suits bounded file budgets and storage spread across drives / buckets / machines (one wrapper each).
+
+1. **Distribution.** Pre-sort input into runs and write them across `K − 1` input files following a perfect generalized-Fibonacci distribution; where the real run count is not perfect, the shortfall is tracked as virtual (empty) runs.
+2. **Merge phases.** Repeatedly merge the `K − 1` inputs into the one output file with a hand-written series-aware merge (a run ends at a sort-order break; D3); when an input drains it becomes the next output and the old output rejoins the inputs. The final merge (every file down to ≤ 1 run) streams straight to the caller. In-memory fast path like `sort`.
+
+**Options:** `compare` / `lessFn`, `batchSize`, `stable`, `onProgress`, `keepTempFiles` as in `sort`, plus storage: `files: ObjectStreamWrapper[]` (explicit, `K = files.length ≥ 3`, user-owned — closed not deleted) **or** `k?: number` (default 4, min 3) with `tmpDir` / `createWrapper`.
 
 ### `mergeJoin(streamA, streamB, options)` / `joinBy` — key-based sorted join (planned)
 
@@ -113,10 +123,14 @@ Helpers compose with the main components. Likely candidates:
 src/index.js → src/wrapper.js             (shipped — protocol bases + consume)
             → src/memory-wrapper.js       (shipped — array-backed)
             → src/local-file-wrapper.js   (shipped — local FS, JSONL default)
-            → src/sort.js, src/merge-join.js, src/union.js,
-              src/intersection.js, src/difference.js, src/merge-sorted.js
+            → src/sort.js                 (shipped — k-way merge sort)
+            → src/polyphase-sort.js       (shipped — polyphase merge sort)
+            → src/merge-join.js, src/union.js, src/intersection.js,
+              src/difference.js, src/merge-sorted.js          (planned)
+
+src/sort.js, src/polyphase-sort.js → src/ordering.js  (shipped — shared comparator + stability)
                         ↓
-                   stream-join (select, sortedInsert, pickFirst)
+                   stream-join (select, sortedInsert, pickFirst)   — k-way sort + ops
                         ↓
                    stream-chain (readableFrom; jsonl utils, gen, asStream)
 ```
@@ -152,6 +166,7 @@ Errors propagate end-to-end with the original value preserved (same model as `st
 
 ```js
 import sort from 'stream-sorting/sort.js';
+import polyphaseSort from 'stream-sorting/polyphase-sort.js';
 import mergeJoin from 'stream-sorting/merge-join.js';
 import union from 'stream-sorting/union.js';
 import intersection from 'stream-sorting/intersection.js';

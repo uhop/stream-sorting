@@ -1,9 +1,9 @@
 import {ObjectStreamWrapper} from './wrapper.js';
 
 /**
- * In-memory `ObjectStreamWrapper`. Backing store is a plain array; items are
- * pushed on write and replayed on read. Useful for tests, small data, and
- * benchmarking the sort algorithms independently of disk.
+ * In-memory `ObjectStreamWrapper` for tests, small data, and benchmarks.
+ *
+ * @see https://github.com/uhop/stream-sorting/wiki/MemoryWrapper
  */
 declare class MemoryWrapper<T = unknown> extends ObjectStreamWrapper<T> {}
 

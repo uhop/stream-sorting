@@ -4,7 +4,7 @@ External merge sort and sorted-stream operations for object-mode Node `Readable`
 
 ## Status
 
-Scaffold phase. The wrapper protocol + two built-in wrappers have shipped; the algorithms that compose them are still **(planned)**. Track progress in the vault: `projects/stream-sorting/queue.md`.
+Mid-build. The wrapper protocol + two built-in wrappers and both sort algorithms (`sort`, `polyphaseSort`) have shipped. The sorted-stream operations below are still **(planned)**. Track progress in the vault: `projects/stream-sorting/queue.md`.
 
 ## Family positioning
 
@@ -85,6 +85,24 @@ const sorted = sort(input, {
 
 **`tmpDir` has no default:** Linux `/tmp` is commonly tmpfs (RAM-backed), which would silently defeat the algorithm. Pass an explicit path, or use `createWrapper: (runIndex) => new MyWrapper(...)` for non-FS storage (S3, in-memory for tests, etc.). In-memory fast path when `input.length ≤ batchSize` — no wrapper involved.
 
+### `polyphaseSort(input, options)` — polyphase merge sort (shipped)
+
+```js
+import polyphaseSort from 'stream-sorting/polyphase-sort.js';
+
+const sorted = polyphaseSort(input, {
+  compare: (a, b) => a - b,   // OR lessFn
+  k: 4,                       // file count (default 4, min 3); OR pass files: [...]
+  tmpDir: '/var/sort',        // OR createWrapper, OR files
+  batchSize: 10000,           // optional
+  stable: true,               // optional, default true
+  onProgress: stats => ...,   // optional
+  keepTempFiles: false        // optional, default false
+});
+```
+
+Fixed-file-budget companion to `sort`: uses exactly `K` files regardless of input size, for bounded file budgets or storage spread across drives / buckets / machines (pass one wrapper per backend via `files`). Same in/out shape and comparator / stability semantics as `sort`; in-memory fast path when `input ≤ batchSize`. Storage is `files` (explicit wrappers, `K = files.length ≥ 3`) OR `k` with `tmpDir` / `createWrapper`. Uses a custom series-aware merge, not `stream-join`'s `mergeSorted`.
+
 ### Planned API
 
 ### `mergeJoin(streamA, streamB, options)` / `joinBy` — SQL-style key join of sorted streams
@@ -115,7 +133,7 @@ The foundational operation: k-way merge of pre-sorted streams.
 
 - All outputs are object-mode `Readable` streams.
 - Backpressure is preserved end-to-end via `stream-chain`'s `readableFrom`.
-- Runtime deps: `stream-chain` and `stream-join`. Every component composes `stream-join`'s `select` + `sortedInsert`.
+- Runtime deps: `stream-chain` and `stream-join`. `sort` and the planned sorted-stream ops compose `stream-join`'s `select` + `sortedInsert`; `polyphaseSort` uses a custom merge.
 - Comparator API matches `Array.prototype.sort`: `(a, b) => number`.
 - The sort is disk-backed by design — handles inputs larger than memory.
 - **Node-only** — no web entry point; no browser tests.
