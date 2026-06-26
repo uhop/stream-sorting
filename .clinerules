@@ -73,7 +73,7 @@ stream-sorting/
 
 ## Architecture quick reference
 
-The package is mid-build. **Implemented:**
+All operations are implemented (pre-first-publish). **Implemented:**
 
 - The wrapper protocol at `src/wrapper.js` (`ObjectStreamWrapper<T>` + `ItemWriter<T>` base classes, extendable for `instanceof` / shared defaults, structurally satisfiable too; mode-exclusive `idle | writing | reading`). The protocol is runtime-agnostic: `openWriter()` returns an `ItemWriter<T>` with `write(item)` / `writeAll(iter)` / `end()` / `ended`; `openReader()` returns an `AsyncIterable<T>`. A `consume(writer, source)` helper (also in `src/wrapper.js`) drains an iterable and ends the writer in one call.
 - Two built-in wrappers: `MemoryWrapper` (array-backed; for tests + small data) and `LocalFileWrapper` (local FS, JSONL by default, user-overridable `serialize` / `deserialize`, no default `tmpDir` per the Linux-tmpfs footgun).
@@ -82,13 +82,10 @@ The package is mid-build. **Implemented:**
 - **`join` / `leftJoin` / `fullJoin`** (`src/sorted/{join,left-join,full-join}.js`, re-exported from the index) — key-based join of two or more sorted streams. Inputs are a **named map** `{name: {input, key?, optional?}}` (`key` defaults to identity). `join` is an inner join (every required input must have the key); `optional: true` null-fills a side, and `leftJoin` (first input required, rest optional) / `fullJoin` (all optional) are thin wrappers that set it. Equal keys form a Cartesian product. `combine(bag)` builds each row from the named bag of matched rows (`{name: row | null}`); the default returns the bag, returning `undefined` drops the combination. `compareKey` OR `lessKey` (default natural order; composite/tuple keys need an explicit comparator), optional `maxGroupSize` guard. `AsyncIterable<T> | Iterable<T>` in → `AsyncGenerator` out; validates synchronously then generates; throws on an out-of-order input. Custom group-aware merge (the D3 exception), sharing the peekable reader at `src/reader.js`.
 - **`aggregate(master, children, options)`** (`src/sorted/aggregate.js`) — group sorted child streams under a master by key, folding each child's per-key group; one output row per key. The master is a `{input, key, init?, fold?, finalize?}` descriptor (external spine; duplicate master keys fold to one base, first-wins by default) **or** a `key => object` function (group-by; spine = the children's keys). Children are a named map; each folds with `init()` / `fold(acc, item)` / `finalize(acc)` (default = collect-to-array), `required: true` drops masters with an empty group. `combine(base, parts)` (default `{...base, ...parts}`, `undefined` drops); `compareKey` / `lessKey`, `maxGroupSize`. Multi-level nesting is composition (join-enrich → re-sort → flat aggregate per level), not a built-in. Same custom group-aware merge sharing `src/reader.js`.
 
-Planned next:
+- **`matching` / `unmatched`** (`src/sorted/{matching,unmatched}.js`) — key-based filters emitting rows of the primary stream whose key is present / absent in the other (semi / anti-join; whole rows pass, no `combine`, primary duplicates preserved). Two `{input, key?}` descriptors `(primary, probe)`; `compareKey` / `lessKey`. Thin wrappers over the shared `src/sorted/keyed-filter.js`.
+- **`merge` / `union` / `intersection` / `difference`** (`src/sorted/`) — value-based set operations on an array of sorted streams; `{compare?, lessFn?}` (default natural order). `merge` k-way merges keeping duplicates; `union` adds cross-stream dedup; `intersection` (≥2 streams) keeps values in all; `difference` keeps `streams[0]` minus the rest. `union`/`intersection`/`difference` emit sets (deduped). `merge` + `union` share `src/sorted/set-ops.js`. (`merge` was the planned `mergeSorted`; whether `stream-join` drops its copy is still open — see vault `projects/stream-sorting/queue.md`.)
 
-- **`matching` / `unmatched`** — filters emitting rows of the primary stream whose key is present / absent in the other (the former semi/anti joins; share the merge walk with the set-ops).
-- **`union` / `intersection` / `difference`** — set operations on sorted streams by value (`lessFn`).
-- **`merge`** — k-way sorted merge without dedup (was `mergeSorted`); may subsume the copy in `stream-join/utils/merge-sorted` (open decision; see vault `projects/stream-sorting/queue.md`).
-
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module map and dependency graph as components land.
+All shipped operations live under `src/sorted/` and share the peekable reader (`src/reader.js`) and `src/ordering.js`. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module map and dependency graph.
 
 ## Verification commands
 

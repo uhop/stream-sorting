@@ -4,7 +4,7 @@ External merge sort and sorted-stream operations for object-mode Node `Readable`
 
 ## Status
 
-The package is mid-build. The wrapper protocol, two built-in wrappers (`MemoryWrapper`, `LocalFileWrapper`), both sort algorithms (`sort`, `polyphaseSort`), the join family (`join`, `leftJoin`, `fullJoin`), and `aggregate` have shipped. Components below marked **(planned)** are still unimplemented. The shape captured here is the design target — implementation lands incrementally per `projects/stream-sorting/queue.md` in Eugene's vault.
+All operations are implemented (the package has not yet published its first npm release): the wrapper protocol, two built-in wrappers (`MemoryWrapper`, `LocalFileWrapper`), both sort algorithms (`sort`, `polyphaseSort`), the join family (`join`, `leftJoin`, `fullJoin`), `aggregate`, the key-based filters (`matching`, `unmatched`), and the set operations (`merge`, `union`, `intersection`, `difference`). Remaining work is tracked in `projects/stream-sorting/queue.md` in Eugene's vault.
 
 ## Object-stream wrapper protocol (shipped)
 
@@ -258,9 +258,22 @@ Import from `stream-sorting/sorted/join.js` (and `sorted/left-join.js`, `sorted/
 
 Implemented as a custom group-aware merge (the D3 exception, like `polyphaseSort`) sharing a peekable reader at `src/reader.js` — a flat `select` + `sortedInsert` merge can't express equal-key grouping plus the Cartesian product.
 
-### Filters: `matching` / `unmatched` (planned)
+### `matching(primary, probe, options)` / `unmatched(...)` — key-based filters
 
-Filters emitting rows of the primary stream based on whether the key is present (`matching`) or absent (`unmatched`) in the other — no `combine`, no product; whole rows pass through. The former semi/anti joins; they share the merge walk with the set operations and may be exposed as aliases of keyed `intersection` / `difference`.
+```ts
+interface FilterInput<T, K> {
+  input: AsyncIterable<T> | Iterable<T>;
+  key?: (item: T) => K; // default: identity
+}
+function matching<T>(
+  primary: FilterInput<T, any>,
+  probe: FilterInput<any, any>,
+  options?: {compareKey?: (a: any, b: any) => number; lessKey?: (a: any, b: any) => boolean}
+): AsyncGenerator<T, void, void>;
+// `unmatched` has the same signature.
+```
+
+Import from `stream-sorting/sorted/matching.js` / `sorted/unmatched.js`. Emit rows of `primary` whose key is present (`matching`) or absent (`unmatched`) in `probe` — semi / anti-join filters. Whole rows pass through unchanged; no `combine`, no product, and **primary duplicates are preserved** (a filter, not a dedup); probe duplicates are ignored. Both inputs are `{input, key?}` descriptors sorted by key (`key` defaults to identity, so `probe` can be a bare key stream); `compareKey` / `lessKey`, default natural order. Closely related to keyed `intersection` / `difference`, but they keep the primary's whole rows. Throw on an out-of-order primary.
 
 ### `aggregate(master, children, options)` — group/fold sorted streams by key
 
@@ -297,37 +310,25 @@ Import from `stream-sorting/sorted/aggregate.js` (re-exported from the index). S
 
 **Multi-level nesting** (department → employee → equipment) is composition, not a built-in: a `join` to enrich foreign keys, a re-`sort` to the ancestor key path, then a flat `aggregate` per level (`aggregate` emits in key order, so its output feeds the next level still sorted). Implemented as the same custom group-aware merge sharing `src/reader.js`.
 
-### `merge(streams, lessFn, options?)` — sorted merge without dedup (planned)
+### `merge` / `union` / `intersection` / `difference` — value-based set ops
 
 ```ts
-function merge<T>(
-  streams: Array<AsyncIterable<T> | Iterable<T>>,
-  lessFn: (a: T, b: T) => boolean,
-  options?: {
-    /* TBD */
-  }
-): AsyncGenerator<T, void, void>;
+type SetOpOptions = {compare?: (a: any, b: any) => number; lessFn?: (a: any, b: any) => boolean};
+
+function merge<T>(streams: Array<AsyncIterable<T> | Iterable<T>>, options?: SetOpOptions): AsyncGenerator<T, void, void>;
+function union<T>(streams: Array<AsyncIterable<T> | Iterable<T>>, options?: SetOpOptions): AsyncGenerator<T, void, void>;
+function intersection<T>(streams: Array<AsyncIterable<T> | Iterable<T>>, options?: SetOpOptions): AsyncGenerator<T, void, void>;
+function difference<T>(streams: Array<AsyncIterable<T> | Iterable<T>>, options?: SetOpOptions): AsyncGenerator<T, void, void>;
 ```
 
-k-way merge of pre-sorted input streams (was `mergeSorted`). Each item from any input appears once in the output; duplicates across streams are preserved (use `union` for dedup).
+Each takes an array of pre-sorted streams; the comparator defines both order and equality (default natural). Imported from `stream-sorting/sorted/{merge,union,intersection,difference}.js`.
 
-Equivalent to `stream-join/utils/merge-sorted.js`. Open decision (see `projects/stream-sorting/queue.md`): whether `stream-join`'s copy becomes a re-export from here, or both packages keep an independent copy.
+- **`merge`** — k-way merge, **duplicates preserved** (was `mergeSorted`; the suite's foundational op, and what `union` builds on). Ties keep input order. Whether `stream-join` drops its `utils/merge-sorted` copy for this is still open (see `projects/stream-sorting/queue.md`).
+- **`union`** — `merge` plus cross-stream (and within-stream) deduplication. `{1,2,3} ∪ {2,3,4} = {1,2,3,4}`.
+- **`intersection`** — values present in **all** streams (≥ 2 inputs), deduped: advance the minimum head, emit once when every head agrees.
+- **`difference`** — values in `streams[0]` not present in any of `streams[1..]`, deduped.
 
-### Set operations on sorted streams (planned)
-
-```ts
-function union<T>(streams: Readable[], lessFn: (a: T, b: T) => boolean): Readable;
-function intersection<T>(streams: Readable[], lessFn: (a: T, b: T) => boolean): Readable;
-function difference<T>(streamA: Readable, streamsB: Readable[], lessFn: (a: T, b: T) => boolean): Readable;
-```
-
-All take pre-sorted inputs under `lessFn` and emit a sorted output.
-
-- **`union`** — sorted merge with duplicate elimination across streams. `{1,2,3} ∪ {2,3,4} = {1,2,3,4}`. Distinct from `merge` which preserves duplicates. Implementation: `select` + `sortedInsert` wrapping the picker with "skip if equal to last emitted."
-- **`intersection`** — values present in **all** streams. 2-way walks both, emitting on match; k-way tracks the current key across all and emits when all agree.
-- **`difference`** — values in `streamA` not present in any `streamsB[i]`. 2-way walks both, emitting from A when smaller, skipping when equal, advancing B when smaller.
-
-Equality is defined by `!lessFn(a, b) && !lessFn(b, a)` — i.e., neither is less than the other.
+`union` / `intersection` / `difference` emit deduped sets; equality is "the comparator ranks neither below the other." An out-of-order input throws when the offending item is reached (best-effort where a stream's tail goes unconsumed).
 
 ## Composition examples
 
@@ -411,7 +412,7 @@ const merged = select(streams, {
 });
 ```
 
-`stream-sorting`'s `merge` (planned) is the same composition wrapped under a friendlier name.
+`stream-sorting`'s `merge` is the same composition wrapped under a friendlier name.
 
 ## See also
 

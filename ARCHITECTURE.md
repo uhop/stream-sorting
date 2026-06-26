@@ -4,7 +4,7 @@
 
 **Node-only.** The package targets server / CLI contexts. The disk-backed sort relies on `node:fs`, `node:os`, `node:path`; there is no web entry point and no browser test surface. Sorting at billion-record scale is a server problem.
 
-The package is mid-build. The wrapper protocol, its two built-in implementations, both sort algorithms (`sort`, `polyphaseSort`), the join family (`join`, `leftJoin`, `fullJoin`), and `aggregate` have shipped (see below); the remaining sorted-stream operations are still **(planned)**.
+All operations are implemented (the package has not yet published its first npm release): the wrapper protocol and its two built-in implementations, both sort algorithms (`sort`, `polyphaseSort`), the join family (`join`, `leftJoin`, `fullJoin`), `aggregate`, the key-based filters (`matching`, `unmatched`), and the set operations (`merge`, `union`, `intersection`, `difference`) — all detailed below.
 
 ## Project layout
 
@@ -97,9 +97,9 @@ Key-based join of two or more sorted streams, at `src/sorted/{join,left-join,ful
 
 **Merge:** a custom group-aware walk — the deliberate D3 exception, like `polyphaseSort` — sharing the peekable reader at `src/reader.js`. A flat `select` + `sortedInsert` merge can't express equal-key grouping across inputs plus the Cartesian product, so the engine (`src/sorted/engine.js`) orchestrates directly: find the minimum key, gather each input's equal-key group, emit the product, advance.
 
-### Filters: `matching` / `unmatched` (planned)
+### Filters: `matching` / `unmatched` (shipped)
 
-Filters emitting rows of the primary stream whose key is present (`matching`) or absent (`unmatched`) in the other — no `combine`, no product; whole rows pass. The former semi/anti joins; share the merge walk with the set ops.
+Key-based filters at `src/sorted/{matching,unmatched}.js` (thin wrappers over the shared `src/sorted/keyed-filter.js`): emit rows of the primary stream whose key is present (`matching`) or absent (`unmatched`) in the probe — no `combine`, no product; whole rows pass through, primary duplicates preserved (semi / anti-join). Both inputs are `{input, key?}` descriptors `(primary, probe)`; `compareKey` / `lessKey`, default natural order. Closely related to keyed `intersection` / `difference`, but they keep the primary's whole rows rather than emitting shared values.
 
 ### `aggregate(master, children, options)` — group/fold sorted streams (shipped)
 
@@ -116,17 +116,16 @@ Group sorted child streams under a master by key, folding each child's per-key g
 
 **Multi-level nesting** (department → employee → equipment) is composition, not a built-in: a `join` to enrich foreign keys, a re-`sort` to the ancestor key path, then a flat `aggregate` per level (`aggregate` emits in key order, so its output feeds the next level still sorted).
 
-### Set operations on sorted streams (planned)
+### Set operations on sorted streams (shipped)
 
-All take N sorted input streams (2 for `difference`) plus a comparator and emit a sorted output stream.
+Value-based operations on an array of sorted streams, at `src/sorted/{merge,union,intersection,difference}.js` with the shared core in `src/sorted/set-ops.js`. Each takes `{compare?, lessFn?}` (default natural order); the comparator defines both order and equality. `union` / `intersection` / `difference` emit sets (deduped); `merge` keeps duplicates.
 
-- **`union(streams, lessFn)`** — sorted merge with **duplicate elimination across streams**: `{1,2,3} ∪ {2,3,4} = {1,2,3,4}` (distinct from plain `merge` which would emit `{1,2,2,3,3,4}`). Implemented as `select` + `sortedInsert` wrapping the picker with "skip if equal to last emitted."
-- **`intersection(streams, lessFn)`** — emit values present in **all** streams. 2-way case: walk both, emit when keys match, advance the smaller side otherwise. k-way: extension via simultaneous key-tracking across streams.
-- **`difference(streamA, ...streamsB, lessFn)`** — emit values in `streamA` not present in any `streamsB[i]`.
+- **`merge(streams, options)`** — k-way merge keeping all duplicates; the foundational op (was `mergeSorted`). Ties keep input order; `union` builds on it.
+- **`union(streams, options)`** — `merge` plus adjacent dedup, across and within streams: `{1,2,3} ∪ {2,3,4} = {1,2,3,4}`.
+- **`intersection(streams, options)`** — values present in **all** streams (≥ 2 inputs), deduped: advance the minimum head, emit once when every head agrees.
+- **`difference(streams, options)`** — values in `streams[0]` not present in any of `streams[1..]`, deduped.
 
-### `merge(streams, lessFn, options?)` — sorted merge without dedup (planned)
-
-The suite's foundational operation (was `mergeSorted`): a k-way sorted merge of input streams under a `lessFn`. Same primitive as `stream-join/utils/merge-sorted`. Open decision (see vault `projects/stream-sorting/queue.md`): (a) move it here and have `stream-join` delete its copy; (b) leave `stream-join`'s copy as a back-compat alias re-exporting from `stream-sorting`; (c) accept the duplication. To be settled when `stream-sorting` reaches publish-readiness.
+Whether `stream-join` drops its `utils/merge-sorted` copy in favor of this `merge` is still open (see vault `projects/stream-sorting/queue.md`).
 
 ## Helpers (`src/utils/`, planned)
 
@@ -147,13 +146,15 @@ src/index.js → src/wrapper.js             (shipped — protocol bases + consum
             → src/sorted/join.js, src/sorted/left-join.js,
               src/sorted/full-join.js     (shipped — join family)
             → src/sorted/aggregate.js     (shipped — group / fold)
-            → src/sorted/matching.js, src/sorted/unmatched.js,
-              src/sorted/union.js, src/sorted/intersection.js,
-              src/sorted/difference.js, src/sorted/merge.js   (planned)
+            → src/sorted/matching.js, src/sorted/unmatched.js   (shipped — keyed filters)
+            → src/sorted/merge.js, src/sorted/union.js,
+              src/sorted/intersection.js, src/sorted/difference.js   (shipped — set ops)
 
 src/sort.js, src/polyphase-sort.js, src/sorted/* → src/ordering.js  (shipped — comparator + stability + defaultCompare)
-src/polyphase-sort.js, src/sorted/engine.js, src/sorted/aggregate.js → src/reader.js   (shipped — peekable reader)
-src/sorted/{join,left-join,full-join}.js → src/sorted/engine.js  (shipped — prepare + runJoin)
+src/polyphase-sort.js, src/sorted/{engine,aggregate,set-ops,keyed-filter}.js → src/reader.js   (shipped — peekable reader)
+src/sorted/{join,left-join,full-join}.js → src/sorted/engine.js          (shipped — prepare + runJoin)
+src/sorted/{merge,union}.js → src/sorted/set-ops.js                       (shipped — prepareSetOp + mergeRun)
+src/sorted/{matching,unmatched}.js → src/sorted/keyed-filter.js          (shipped — prepareFilter + runFilter)
                         ↓
                    stream-join (select, sortedInsert, pickFirst)   — k-way sort + ops
                         ↓
@@ -187,7 +188,7 @@ Errors propagate end-to-end with the original value preserved (same model as `st
 - **Lint:** `npm run lint` (Prettier check).
 - **Lint fix:** `npm run lint:fix` (Prettier write).
 
-## Import paths (target)
+## Import paths
 
 ```js
 import sort from 'stream-sorting/sort.js';
@@ -195,14 +196,18 @@ import polyphaseSort from 'stream-sorting/polyphase-sort.js';
 import join from 'stream-sorting/sorted/join.js';
 import leftJoin from 'stream-sorting/sorted/left-join.js';
 import fullJoin from 'stream-sorting/sorted/full-join.js';
-
-// planned
+import aggregate from 'stream-sorting/sorted/aggregate.js';
+import matching from 'stream-sorting/sorted/matching.js';
+import unmatched from 'stream-sorting/sorted/unmatched.js';
+import merge from 'stream-sorting/sorted/merge.js';
 import union from 'stream-sorting/sorted/union.js';
 import intersection from 'stream-sorting/sorted/intersection.js';
 import difference from 'stream-sorting/sorted/difference.js';
-import merge from 'stream-sorting/sorted/merge.js';
 
-// Helper builders
+// or all from the index
+import {sort, join, aggregate, matching, merge, union /* … */} from 'stream-sorting';
+
+// Helper builders (planned)
 import byKey from 'stream-sorting/utils/by-key.js';
 ```
 

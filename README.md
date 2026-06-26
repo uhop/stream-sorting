@@ -15,7 +15,7 @@ Runtime dependencies: [`stream-chain`](https://www.npmjs.com/package/stream-chai
 
 ## Status
 
-**Early development.** The object-stream wrapper protocol, both sort algorithms (`sort`, `polyphaseSort`), and the join family (`join`, `leftJoin`, `fullJoin`), and `aggregate` are implemented; the remaining sorted-stream operations (filters, set ops, `merge`) are planned. See the [wiki](https://github.com/uhop/stream-sorting/wiki) for usage and `ARCHITECTURE.md` for the design.
+**Early development.** All operations are implemented — both sort algorithms (`sort`, `polyphaseSort`), the wrapper protocol, the join family, `aggregate`, the key-based filters, and the set operations (listed below). The package has not yet published its first npm release. See the [wiki](https://github.com/uhop/stream-sorting/wiki) for usage and `ARCHITECTURE.md` for the design.
 
 ## Installation
 
@@ -42,12 +42,9 @@ for await (const item of sort(input, {compare: (a, b) => a.id - b.id, tmpDir: '/
 - **Wrapper protocol** — [`ObjectStreamWrapper`](https://github.com/uhop/stream-sorting/wiki/ObjectStreamWrapper) with built-in [`MemoryWrapper`](https://github.com/uhop/stream-sorting/wiki/MemoryWrapper) and [`LocalFileWrapper`](https://github.com/uhop/stream-sorting/wiki/LocalFileWrapper). The storage abstraction the sorts read and write through, so a sort can exceed any single disk.
 - **[`join`](https://github.com/uhop/stream-sorting/wiki/join)** / **[`leftJoin`](https://github.com/uhop/stream-sorting/wiki/leftJoin)** / **[`fullJoin`](https://github.com/uhop/stream-sorting/wiki/fullJoin)** — key-based join of two or more sorted streams; named-map inputs, Cartesian product on equal keys, `combine` over a named bag, inner + outer shapes.
 - **[`aggregate`](https://github.com/uhop/stream-sorting/wiki/aggregate)** — fold sorted child streams under a master by key (SQL-style group/aggregate); the master is a `{input, key}` stream or a `key => object` function, children fold via `init`/`fold`/`finalize`, one row per key.
-
-### Planned
-
-- **`matching`** / **`unmatched`** — filters: rows of the primary stream whose key is present / absent in the other.
-- **`union`** / **`intersection`** / **`difference`** — set operations on sorted streams.
-- **`merge`** — k-way sorted merge without deduplication; the suite's foundational op.
+- **[`matching`](https://github.com/uhop/stream-sorting/wiki/matching)** / **[`unmatched`](https://github.com/uhop/stream-sorting/wiki/unmatched)** — key-based filters: rows of the primary stream whose key is present / absent in the other (semi / anti-join).
+- **[`merge`](https://github.com/uhop/stream-sorting/wiki/merge)** — k-way sorted merge, duplicates preserved; the suite's foundational op.
+- **[`union`](https://github.com/uhop/stream-sorting/wiki/union)** / **[`intersection`](https://github.com/uhop/stream-sorting/wiki/intersection)** / **[`difference`](https://github.com/uhop/stream-sorting/wiki/difference)** — set operations on sorted streams.
 
 ## Family
 

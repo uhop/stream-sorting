@@ -4,7 +4,7 @@ External merge sort and sorted-stream operations for object-mode Node `Readable`
 
 ## Status
 
-Mid-build. The wrapper protocol + two built-in wrappers, both sort algorithms (`sort`, `polyphaseSort`), the join family (`join`, `leftJoin`, `fullJoin`), and `aggregate` have shipped. The sorted-stream operations below are still **(planned)**. Track progress in the vault: `projects/stream-sorting/queue.md`.
+All operations are implemented (pre-first-publish): the wrapper protocol + two built-in wrappers, both sort algorithms (`sort`, `polyphaseSort`), the join family (`join`, `leftJoin`, `fullJoin`), `aggregate`, the key-based filters (`matching`, `unmatched`), and the set operations (`merge`, `union`, `intersection`, `difference`). Track remaining work in the vault: `projects/stream-sorting/queue.md`.
 
 ## Family positioning
 
@@ -130,11 +130,26 @@ const out = aggregate(
 
 SQL-style `GROUP BY` over streams; one output row per key. Master is a `{input, key, init?, fold?, finalize?}` stream (duplicate keys fold to one base, first-wins default) **or** a `key => object` function (group-by). Children are a named map; each folds with `init()` / `fold(acc, item)` / `finalize(acc)` (default = collect-to-array; covers every scalar SQL aggregate), `required: true` drops empty-group masters. `combine(base, parts)` (default `{...base, ...parts}`, `undefined` drops); `compareKey` / `lessKey`, `maxGroupSize`. Multi-level nesting = composition (join-enrich → re-sort → flat aggregate per level).
 
-### Planned API
+### `matching(primary, probe, options)` / `unmatched(...)` — key-based filters
 
-- **`matching` / `unmatched`** — filters: rows of the primary stream whose key is present / absent in the other.
-- **`union(streams, lessFn)` / `intersection(streams, lessFn)` / `difference(streamA, streamsB, lessFn)`** — set operations on sorted streams by value.
-- **`merge(streams, lessFn, options?)`** — k-way sorted merge without dedup; the suite's foundational op (was `mergeSorted`).
+```js
+import matching from 'stream-sorting/sorted/matching.js';
+
+// keep orders whose customerId is in the activeCustomers stream
+const active = matching({input: orders, key: o => o.customerId}, {input: activeCustomers, key: c => c.id});
+```
+
+Emit rows of `primary` whose key is present (`matching`) / absent (`unmatched`) in `probe` — semi / anti-join filters; whole rows pass, no `combine`, primary duplicates preserved. Both inputs are `{input, key?}` descriptors; `compareKey` / `lessKey` (default natural order).
+
+### `merge` / `union` / `intersection` / `difference` — value-based set ops
+
+```js
+import union from 'stream-sorting/sorted/union.js';
+
+const all = union([streamA, streamB], {compare: (a, b) => a - b});
+```
+
+Each takes an array of sorted streams + `{compare?, lessFn?}` (default natural order; the comparator defines order and equality). `merge` k-way-merges keeping duplicates (foundational; was `mergeSorted`); `union` adds cross-stream dedup; `intersection` (≥2 streams) keeps values in all; `difference` keeps `streams[0]` minus the rest. `union` / `intersection` / `difference` emit deduped sets.
 
 ## Critical rules
 
