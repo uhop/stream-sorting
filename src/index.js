@@ -15,3 +15,4 @@ export {default as intersection} from './sorted/intersection.js';
 export {default as difference} from './sorted/difference.js';
 export {default as matching} from './sorted/matching.js';
 export {default as unmatched} from './sorted/unmatched.js';
+export {default as sortJsonl} from './utils/sort-jsonl.js';

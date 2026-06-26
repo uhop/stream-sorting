@@ -45,6 +45,7 @@ for await (const item of sort(input, {compare: (a, b) => a.id - b.id, tmpDir: '/
 - **[`matching`](https://github.com/uhop/stream-sorting/wiki/matching)** / **[`unmatched`](https://github.com/uhop/stream-sorting/wiki/unmatched)** — key-based filters: rows of the primary stream whose key is present / absent in the other (semi / anti-join).
 - **[`merge`](https://github.com/uhop/stream-sorting/wiki/merge)** — k-way sorted merge, duplicates preserved; the suite's foundational op.
 - **[`union`](https://github.com/uhop/stream-sorting/wiki/union)** / **[`intersection`](https://github.com/uhop/stream-sorting/wiki/intersection)** / **[`difference`](https://github.com/uhop/stream-sorting/wiki/difference)** — set operations on sorted streams.
+- **[`sortJsonl`](https://github.com/uhop/stream-sorting/wiki/sortJsonl)** — text-JSONL convenience: parse lines → `sort` → stringify (`stream-sorting/utils/sort-jsonl.js`).
 
 ## Family
 

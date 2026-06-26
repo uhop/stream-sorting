@@ -330,6 +330,22 @@ Each takes an array of pre-sorted streams; the comparator defines both order and
 
 `union` / `intersection` / `difference` emit deduped sets; equality is "the comparator ranks neither below the other." An out-of-order input throws when the offending item is reached (best-effort where a stream's tail goes unconsumed).
 
+### `sortJsonl(input, options)` — text-JSONL convenience over `sort`
+
+```ts
+function sortJsonl<T>(
+  input: AsyncIterable<string | Uint8Array> | Iterable<string | Uint8Array>,
+  options: SortOptions<T> & {
+    parse?: (line: string) => unknown; // default JSON.parse
+    stringify?: (item: unknown) => string; // default JSON.stringify
+  }
+): AsyncGenerator<string, void, void>;
+```
+
+Import from `stream-sorting/utils/sort-jsonl.js` (re-exported from the index). Parses a **text** JSONL stream into objects (via `stream-chain`'s `fixUtf8Stream` + `lines` — UTF-8-safe across chunk boundaries, tolerant of a missing final newline), runs `sort`, and re-emits JSONL text (`JSON.stringify(item) + '\n'` per item). Accepts every `sort` option (`compare`/`lessFn`, `tmpDir`/`createWrapper`, `batchSize`, `stable`, …) plus `parse` / `stringify`.
+
+This is the **only** text-aware entry point — the rest of the package is object-mode in / object-mode out. `sortJsonl` is exactly the `stream-chain` composition (parse → `sort` → stringify) wrapped under a name; when sorting is one stage of a larger pipeline, compose `stream-chain` directly instead (JSONL framing is `stream-chain`'s job). Lives under `src/utils/` because it is sugar, not a new algorithm.
+
 ## Composition examples
 
 ### Sort a stream of records by ID

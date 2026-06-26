@@ -127,11 +127,14 @@ Value-based operations on an array of sorted streams, at `src/sorted/{merge,unio
 
 Whether `stream-join` drops its `utils/merge-sorted` copy in favor of this `merge` is still open (see vault `projects/stream-sorting/queue.md`).
 
-## Helpers (`src/utils/`, planned)
+## Helpers (`src/utils/`)
 
-Helpers compose with the main components. Likely candidates:
+Helpers compose with the main components but aren't operations themselves. **Shipped:**
 
-- Run-file serializer / deserializer adapters (JSON line-delimited default; pluggable for other encodings).
+- **`sortJsonl(input, options)`** (`src/utils/sort-jsonl.js`) — text-JSONL convenience. Parses a text stream into objects with `stream-chain`'s `fixUtf8Stream` + `lines` (the same framing `LocalFileWrapper` reads with), runs `sort`, and re-emits JSONL text (`JSON.stringify(item) + '\n'` per item). Text in (`AsyncIterable<string | Uint8Array>`) → `AsyncGenerator<string>`. Accepts all `sort` options plus `parse` / `stringify` hooks. This is the only text-aware entry point — the core operations stay object-mode in / object-mode out; `sortJsonl` is sugar for the `stream-chain` composition, so it lives under `utils/`, not as a core op.
+
+Still **planned:**
+
 - Key-extraction adapters around `compare` → `lessFn` for the set ops.
 - Common comparator builders (e.g., `byKey('field')`, `byKeys(['field1', 'field2'])`, `byKey('field', desc)`).
 
@@ -149,7 +152,9 @@ src/index.js → src/wrapper.js             (shipped — protocol bases + consum
             → src/sorted/matching.js, src/sorted/unmatched.js   (shipped — keyed filters)
             → src/sorted/merge.js, src/sorted/union.js,
               src/sorted/intersection.js, src/sorted/difference.js   (shipped — set ops)
+            → src/utils/sort-jsonl.js     (shipped — text-JSONL convenience over sort)
 
+src/utils/sort-jsonl.js → src/sort.js + stream-chain (chain, fixUtf8Stream, lines, readableFrom)
 src/sort.js, src/polyphase-sort.js, src/sorted/* → src/ordering.js  (shipped — comparator + stability + defaultCompare)
 src/polyphase-sort.js, src/sorted/{engine,aggregate,set-ops,keyed-filter}.js → src/reader.js   (shipped — peekable reader)
 src/sorted/{join,left-join,full-join}.js → src/sorted/engine.js          (shipped — prepare + runJoin)
@@ -203,9 +208,10 @@ import merge from 'stream-sorting/sorted/merge.js';
 import union from 'stream-sorting/sorted/union.js';
 import intersection from 'stream-sorting/sorted/intersection.js';
 import difference from 'stream-sorting/sorted/difference.js';
+import sortJsonl from 'stream-sorting/utils/sort-jsonl.js';
 
 // or all from the index
-import {sort, join, aggregate, matching, merge, union /* … */} from 'stream-sorting';
+import {sort, join, aggregate, matching, merge, union, sortJsonl /* … */} from 'stream-sorting';
 
 // Helper builders (planned)
 import byKey from 'stream-sorting/utils/by-key.js';

@@ -151,9 +151,19 @@ const all = union([streamA, streamB], {compare: (a, b) => a - b});
 
 Each takes an array of sorted streams + `{compare?, lessFn?}` (default natural order; the comparator defines order and equality). `merge` k-way-merges keeping duplicates (foundational; was `mergeSorted`); `union` adds cross-stream dedup; `intersection` (≥2 streams) keeps values in all; `difference` keeps `streams[0]` minus the rest. `union` / `intersection` / `difference` emit deduped sets.
 
+### `sortJsonl(input, options)` — sort a text JSONL stream
+
+```js
+import sortJsonl from 'stream-sorting/utils/sort-jsonl.js';
+
+for await (const line of sortJsonl(textInput, {compare: (a, b) => a.id - b.id, tmpDir: '/var/sort'})) ...
+```
+
+Convenience over `sort` for **text** JSONL: parses lines to objects (via `stream-chain`'s `fixUtf8Stream` + `lines`), sorts, re-emits JSONL text (one newline-terminated line per item). `AsyncIterable<string | Uint8Array>` in → `AsyncGenerator<string>` out; accepts all `sort` options plus `parse` / `stringify`. The one text-aware entry point; compose `stream-chain` directly when sorting is just one stage of a larger pipeline.
+
 ## Critical rules
 
-- All outputs are object-mode `Readable` streams.
+- Every operation returns an `AsyncIterable` (async generator); convert at the boundary with `readableFrom(...)` / `ReadableStream.from(...)`. `sortJsonl` yields text lines.
 - Backpressure is preserved end-to-end via `stream-chain`'s `readableFrom`.
 - Runtime deps: `stream-chain` and `stream-join`. `sort`'s k-way merge composes `stream-join`'s `mergeSorted` (built on `select` + `sortedInsert`); `polyphaseSort` and the join family use custom group-aware merges.
 - Comparator API matches `Array.prototype.sort`: `(a, b) => number`.

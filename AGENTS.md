@@ -82,8 +82,9 @@ All operations are implemented (pre-first-publish). **Implemented:**
 
 - **`matching` / `unmatched`** (`src/sorted/{matching,unmatched}.js`) — key-based filters emitting rows of the primary stream whose key is present / absent in the other (semi / anti-join; whole rows pass, no `combine`, primary duplicates preserved). Two `{input, key?}` descriptors `(primary, probe)`; `compareKey` / `lessKey`. Thin wrappers over the shared `src/sorted/keyed-filter.js`.
 - **`merge` / `union` / `intersection` / `difference`** (`src/sorted/`) — value-based set operations on an array of sorted streams; `{compare?, lessFn?}` (default natural order). `merge` k-way merges keeping duplicates; `union` adds cross-stream dedup; `intersection` (≥2 streams) keeps values in all; `difference` keeps `streams[0]` minus the rest. `union`/`intersection`/`difference` emit sets (deduped). `merge` + `union` share `src/sorted/set-ops.js`. (`merge` was the planned `mergeSorted`; whether `stream-join` drops its copy is still open — see vault `projects/stream-sorting/queue.md`.)
+- **`sortJsonl(input, options)`** (`src/utils/sort-jsonl.js`) — text-JSONL convenience: parse lines to objects (via `stream-chain`'s `fixUtf8Stream` + `lines`), `sort`, re-emit JSONL text. Text in (`AsyncIterable<string | Uint8Array>`) → `AsyncGenerator<string>` (one newline-terminated line per item). Accepts all `sort` options plus `parse` / `stringify`. The one text-aware entry point (the core operations are object-mode); a thin composition, not a new algorithm — hence under `utils/`, not `sorted/`.
 
-All shipped operations live under `src/sorted/` and share the peekable reader (`src/reader.js`) and `src/ordering.js`. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module map and dependency graph.
+The sorted-stream operations live under `src/sorted/` and share the peekable reader (`src/reader.js`) and `src/ordering.js`; `sortJsonl` is the lone convenience under `src/utils/`. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full module map and dependency graph.
 
 ## Verification commands
 

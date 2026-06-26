@@ -22,5 +22,6 @@ export {default as intersection} from './sorted/intersection.js';
 export {default as difference} from './sorted/difference.js';
 export {default as matching} from './sorted/matching.js';
 export {default as unmatched} from './sorted/unmatched.js';
+export {default as sortJsonl, type SortJsonlOptions} from './utils/sort-jsonl.js';
 export type {SetOpOptions} from './sorted/set-ops.js';
 export type {FilterInput, FilterOptions} from './sorted/keyed-filter.js';
