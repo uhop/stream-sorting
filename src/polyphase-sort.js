@@ -72,7 +72,7 @@ const resolveStorage = ({files, k, tmpDir, createWrapper}) => {
 const nextLevel = c => {
   const n = c.length;
   const next = new Array(n);
-  for (let i = 0; i < n - 1; ++i) next[i] = c[0] + c[i + 1];
+  for (let i = 1; i < n; ++i) next[i] = c[0] + c[i];
   next[n - 1] = c[0];
   return next;
 };
