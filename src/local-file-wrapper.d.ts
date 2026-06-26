@@ -16,4 +16,9 @@ declare class LocalFileWrapper<T = unknown> extends ObjectStreamWrapper<T> {
   readonly path: string;
 }
 
+export declare function makeTmpWrapperFactory(
+  tmpDir: string,
+  tag?: string
+): (index: number) => LocalFileWrapper;
+
 export default LocalFileWrapper;

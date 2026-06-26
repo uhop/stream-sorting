@@ -1,3 +1,4 @@
+import type {ComparatorOption} from './ordering.js';
 import type {ObjectStreamWrapper} from './wrapper.js';
 
 export interface SortProgressStats {
@@ -14,15 +15,11 @@ interface SortOptionsBase {
   keepTempFiles?: boolean;
 }
 
-type SortComparator<T> =
-  | {compare: (a: T, b: T) => number; lessFn?: undefined}
-  | {compare?: undefined; lessFn: (a: T, b: T) => boolean};
-
 type SortStorage =
   | {tmpDir: string; createWrapper?: undefined}
   | {tmpDir?: undefined; createWrapper: (runIndex: number) => ObjectStreamWrapper<unknown>};
 
-export type SortOptions<T = unknown> = SortOptionsBase & SortComparator<T> & SortStorage;
+export type SortOptions<T = unknown> = SortOptionsBase & ComparatorOption<T> & SortStorage;
 
 /**
  * Sorts an object stream that does not fit in memory.

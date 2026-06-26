@@ -1,15 +1,18 @@
+import type {KeyComparatorOptions} from '../ordering.js';
+
 export interface JoinInput<T = unknown, K = unknown> {
   input: AsyncIterable<T> | Iterable<T>;
   key?: (item: T) => K;
   optional?: boolean;
 }
 
-type ItemOf<D> = D extends JoinInput<infer T, any> ? T : never;
-type Bag<I> = {[K in keyof I]: ItemOf<I[K]> | null};
+export type ItemOf<D> = D extends JoinInput<infer T, any> ? T : never;
+export type Bag<I> = {[K in keyof I]: ItemOf<I[K]> | null};
 
-export interface JoinOptions<I = Record<string, JoinInput>, R = Bag<I>> {
-  compareKey?: (a: any, b: any) => number;
-  lessKey?: (a: any, b: any) => boolean;
+export interface JoinOptions<
+  I = Record<string, JoinInput>,
+  R = Bag<I>
+> extends KeyComparatorOptions {
   combine?: (bag: Bag<I>) => R | undefined;
   maxGroupSize?: number;
 }

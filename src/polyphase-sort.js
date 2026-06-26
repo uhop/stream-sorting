@@ -1,9 +1,6 @@
 // @ts-self-types="./polyphase-sort.d.ts"
 
-import {randomUUID} from 'node:crypto';
-import {join} from 'node:path';
-
-import LocalFileWrapper from './local-file-wrapper.js';
+import {makeTmpWrapperFactory} from './local-file-wrapper.js';
 import {normalizeComparator, validateInput, makeStability} from './ordering.js';
 import {DONE, makeReader} from './reader.js';
 
@@ -51,15 +48,9 @@ const resolveStorage = ({files, k, tmpDir, createWrapper}) => {
       K: count,
       owned: true,
       makeWrappers: () => {
-        const unique = randomUUID();
+        const make = makeTmpWrapperFactory(tmpDir, 'polyphase');
         const wrappers = [];
-        for (let i = 0; i < count; ++i) {
-          wrappers.push(
-            new LocalFileWrapper({
-              path: join(tmpDir, `stream-sorting-polyphase-${process.pid}-${unique}-${i}.jsonl`)
-            })
-          );
-        }
+        for (let i = 0; i < count; ++i) wrappers.push(make(i));
         return wrappers;
       }
     };
@@ -69,13 +60,8 @@ const resolveStorage = ({files, k, tmpDir, createWrapper}) => {
   );
 };
 
-const nextLevel = c => {
-  const n = c.length;
-  const next = new Array(n);
-  for (let i = 1; i < n; ++i) next[i] = c[0] + c[i];
-  next[n - 1] = c[0];
-  return next;
-};
+// order-n generalized Fibonacci, descending: Knuth TAOCP vol 3 §5.4.2
+const nextLevel = c => [...c.slice(1).map(x => x + c[0]), c[0]];
 
 async function* mergeStep(contributors, runCompare) {
   for (const c of contributors) c.activeRun = (await c.reader.peek()) !== DONE;

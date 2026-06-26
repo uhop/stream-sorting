@@ -1,9 +1,7 @@
 // @ts-self-types="./engine.d.ts"
 
-import {normalizeComparator, validateInput, defaultCompare} from '../ordering.js';
+import {resolveComparator, validateInput, identity} from '../ordering.js';
 import {DONE, makeReader} from '../reader.js';
-
-const identity = x => x;
 
 export const prepare = (inputs, options, label, optionalFor) => {
   if (inputs === null || typeof inputs !== 'object' || Array.isArray(inputs)) {
@@ -16,10 +14,7 @@ export const prepare = (inputs, options, label, optionalFor) => {
 
   options = options || {};
 
-  const {compare: compareKey} =
-    options.compareKey !== undefined || options.lessKey !== undefined
-      ? normalizeComparator({compare: options.compareKey, lessFn: options.lessKey}, label)
-      : {compare: defaultCompare};
+  const {compare: compareKey} = resolveComparator(options.compareKey, options.lessKey, label);
 
   const combine = options.combine ?? (bag => bag);
   if (typeof combine !== 'function') {

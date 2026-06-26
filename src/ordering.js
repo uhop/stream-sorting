@@ -1,5 +1,7 @@
 // @ts-self-types="./ordering.d.ts"
 
+export const identity = x => x;
+
 export const defaultCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 export const normalizeComparator = ({compare, lessFn}, label) => {
@@ -21,6 +23,11 @@ export const normalizeComparator = ({compare, lessFn}, label) => {
   }
   throw new TypeError(`${label}: either \`compare\` or \`lessFn\` is required`);
 };
+
+export const resolveComparator = (compare, lessFn, label) =>
+  compare !== undefined || lessFn !== undefined
+    ? normalizeComparator({compare, lessFn}, label)
+    : {compare: defaultCompare, lessFn: (a, b) => a < b};
 
 export const validateInput = (input, label) => {
   if (input == null) throw new TypeError(`${label}: input is required`);

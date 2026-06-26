@@ -1,3 +1,4 @@
+import type {ComparatorOption} from './ordering.js';
 import type {ObjectStreamWrapper} from './wrapper.js';
 
 export interface PolyphaseSortProgressStats {
@@ -15,10 +16,6 @@ interface PolyphaseSortOptionsBase {
   onProgress?: (stats: PolyphaseSortProgressStats) => void;
   keepTempFiles?: boolean;
 }
-
-type PolyphaseSortComparator<T> =
-  | {compare: (a: T, b: T) => number; lessFn?: undefined}
-  | {compare?: undefined; lessFn: (a: T, b: T) => boolean};
 
 type PolyphaseSortStorage =
   | {
@@ -41,7 +38,7 @@ type PolyphaseSortStorage =
     };
 
 export type PolyphaseSortOptions<T = unknown> = PolyphaseSortOptionsBase &
-  PolyphaseSortComparator<T> &
+  ComparatorOption<T> &
   PolyphaseSortStorage;
 
 /**

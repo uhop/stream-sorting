@@ -1,12 +1,9 @@
 // @ts-self-types="./sort.d.ts"
 
-import {randomUUID} from 'node:crypto';
-import {join} from 'node:path';
-
 import readableFrom from 'stream-chain/utils/readableFrom.js';
 import mergeSorted from 'stream-join/utils/merge-sorted.js';
 
-import LocalFileWrapper from './local-file-wrapper.js';
+import {makeTmpWrapperFactory} from './local-file-wrapper.js';
 import {consume} from './wrapper.js';
 import {normalizeComparator, validateInput, makeStability} from './ordering.js';
 
@@ -24,11 +21,7 @@ const resolveWrapperFactory = ({tmpDir, createWrapper}) => {
   if (tmpDir !== undefined) {
     if (typeof tmpDir !== 'string' || !tmpDir)
       throw new TypeError('sort: `tmpDir` must be a non-empty string');
-    const unique = randomUUID();
-    return runIndex =>
-      new LocalFileWrapper({
-        path: join(tmpDir, `stream-sorting-${process.pid}-${unique}-${runIndex}.jsonl`)
-      });
+    return makeTmpWrapperFactory(tmpDir);
   }
   throw new TypeError('sort: either `tmpDir` or `createWrapper` is required');
 };

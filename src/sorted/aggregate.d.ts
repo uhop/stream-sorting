@@ -1,3 +1,5 @@
+import type {KeyComparatorOptions} from '../ordering.js';
+
 export interface AggregateChild<T = unknown, K = unknown, A = unknown, R = unknown> {
   input: AsyncIterable<T> | Iterable<T>;
   key?: (item: T) => K;
@@ -16,9 +18,7 @@ export interface AggregateMaster<T = unknown, K = unknown, A = unknown, R = unkn
   finalize?: (acc: A) => R;
 }
 
-export interface AggregateOptions {
-  compareKey?: (a: any, b: any) => number;
-  lessKey?: (a: any, b: any) => boolean;
+export interface AggregateOptions extends KeyComparatorOptions {
   combine?: (master: any, parts: Record<string, any>) => any;
   maxGroupSize?: number;
 }

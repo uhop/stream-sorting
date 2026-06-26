@@ -1,7 +1,9 @@
 // @ts-self-types="./local-file-wrapper.d.ts"
 
+import {randomUUID} from 'node:crypto';
 import {createReadStream, createWriteStream} from 'node:fs';
 import {unlink} from 'node:fs/promises';
+import {join} from 'node:path';
 
 import asStream from 'stream-chain/asStream.js';
 import gen from 'stream-chain/gen.js';
@@ -204,5 +206,12 @@ class LocalFileWrapper extends ObjectStreamWrapper {
     }
   }
 }
+
+export const makeTmpWrapperFactory = (tmpDir, tag = '') => {
+  const unique = randomUUID();
+  const prefix = tag ? `stream-sorting-${tag}` : 'stream-sorting';
+  return index =>
+    new LocalFileWrapper({path: join(tmpDir, `${prefix}-${process.pid}-${unique}-${index}.jsonl`)});
+};
 
 export default LocalFileWrapper;

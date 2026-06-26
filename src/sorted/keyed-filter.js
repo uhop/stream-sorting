@@ -1,9 +1,7 @@
 // @ts-self-types="./keyed-filter.d.ts"
 
-import {normalizeComparator, validateInput, defaultCompare} from '../ordering.js';
+import {resolveComparator, validateInput, identity} from '../ordering.js';
 import {DONE, makeReader} from '../reader.js';
-
-const identity = x => x;
 
 export const prepareFilter = (primary, probe, options, label) => {
   for (const [d, role] of [
@@ -21,10 +19,7 @@ export const prepareFilter = (primary, probe, options, label) => {
     throw new TypeError(`${label}: \`key\` must be a function`);
   }
   options = options || {};
-  const {compare: compareKey} =
-    options.compareKey !== undefined || options.lessKey !== undefined
-      ? normalizeComparator({compare: options.compareKey, lessFn: options.lessKey}, label)
-      : {compare: defaultCompare};
+  const {compare: compareKey} = resolveComparator(options.compareKey, options.lessKey, label);
   return {primaryInput: primary.input, probeInput: probe.input, pKey, qKey, compareKey};
 };
 

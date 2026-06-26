@@ -1,9 +1,8 @@
 // @ts-self-types="./aggregate.d.ts"
 
-import {normalizeComparator, validateInput, defaultCompare} from '../ordering.js';
+import {resolveComparator, validateInput, identity} from '../ordering.js';
 import {DONE, makeReader} from '../reader.js';
 
-const identity = x => x;
 const collectInit = () => [];
 const collectFold = (acc, item) => (acc.push(item), acc);
 
@@ -51,10 +50,7 @@ const prepare = (master, children, options) => {
 
   options = options || {};
 
-  const {compare: compareKey} =
-    options.compareKey !== undefined || options.lessKey !== undefined
-      ? normalizeComparator({compare: options.compareKey, lessFn: options.lessKey}, label)
-      : {compare: defaultCompare};
+  const {compare: compareKey} = resolveComparator(options.compareKey, options.lessKey, label);
 
   const combine = options.combine ?? ((m, parts) => ({...m, ...parts}));
   if (typeof combine !== 'function') {

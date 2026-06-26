@@ -1,6 +1,6 @@
 // @ts-self-types="./set-ops.d.ts"
 
-import {normalizeComparator, validateInput, defaultCompare} from '../ordering.js';
+import {resolveComparator, validateInput} from '../ordering.js';
 import {DONE, makeReader} from '../reader.js';
 
 export const prepareSetOp = (streams, options, label, minStreams = 1) => {
@@ -9,10 +9,7 @@ export const prepareSetOp = (streams, options, label, minStreams = 1) => {
   }
   streams.forEach((s, i) => validateInput(s, `${label}[${i}]`));
   options = options || {};
-  const {compare} =
-    options.compare !== undefined || options.lessFn !== undefined
-      ? normalizeComparator({compare: options.compare, lessFn: options.lessFn}, label)
-      : {compare: defaultCompare};
+  const {compare} = resolveComparator(options.compare, options.lessFn, label);
   return {streams, compare};
 };
 

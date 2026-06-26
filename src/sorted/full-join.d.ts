@@ -1,7 +1,4 @@
-import type {JoinInput, JoinOptions} from './join.js';
-
-type ItemOf<D> = D extends JoinInput<infer T, any> ? T : never;
-type Bag<I> = {[K in keyof I]: ItemOf<I[K]> | null};
+import type {JoinInput, JoinOptions, Bag} from './join.js';
 
 /**
  * Full outer join of sorted streams: every named input is optional, so a row emits for any key present on any side, null-filling the rest.
