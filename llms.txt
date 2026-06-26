@@ -4,7 +4,7 @@ External merge sort and sorted-stream operations for object-mode Node `Readable`
 
 ## Status
 
-Mid-build. The wrapper protocol + two built-in wrappers, both sort algorithms (`sort`, `polyphaseSort`), and the join family (`join`, `leftJoin`, `fullJoin`) have shipped. The sorted-stream operations below are still **(planned)**. Track progress in the vault: `projects/stream-sorting/queue.md`.
+Mid-build. The wrapper protocol + two built-in wrappers, both sort algorithms (`sort`, `polyphaseSort`), the join family (`join`, `leftJoin`, `fullJoin`), and `aggregate` have shipped. The sorted-stream operations below are still **(planned)**. Track progress in the vault: `projects/stream-sorting/queue.md`.
 
 ## Family positioning
 
@@ -116,10 +116,23 @@ const joined = join(
 
 Inner join by default. `inputs` is a named map `{name: {input, key?, optional?}}` (`key` defaults to identity); all inputs must be sorted by key. Equal keys form a Cartesian product. `combine(bag)` builds each row from the named bag `{name: row | null}` (default returns the bag; return `undefined` to drop). `compareKey` OR `lessKey` (default natural order; composite/tuple keys need an explicit comparator), optional `maxGroupSize`. `optional: true` null-fills a side; `leftJoin` (first input required, rest optional) and `fullJoin` (all optional) are thin wrappers. `AsyncIterable | Iterable` in → `AsyncGenerator` out; throws on an out-of-order input.
 
+### `aggregate(master, children, options)` — group/fold sorted streams by key
+
+```js
+import aggregate from 'stream-sorting/sorted/aggregate.js';
+
+const out = aggregate(
+  {input: departments, key: d => d.id}, // master: external stream …
+  {employees: {input: employees, key: e => e.deptId}} // … or `key => object` for group-by
+);
+// → {...department, employees: [...]} per department
+```
+
+SQL-style `GROUP BY` over streams; one output row per key. Master is a `{input, key, init?, fold?, finalize?}` stream (duplicate keys fold to one base, first-wins default) **or** a `key => object` function (group-by). Children are a named map; each folds with `init()` / `fold(acc, item)` / `finalize(acc)` (default = collect-to-array; covers every scalar SQL aggregate), `required: true` drops empty-group masters. `combine(base, parts)` (default `{...base, ...parts}`, `undefined` drops); `compareKey` / `lessKey`, `maxGroupSize`. Multi-level nesting = composition (join-enrich → re-sort → flat aggregate per level).
+
 ### Planned API
 
 - **`matching` / `unmatched`** — filters: rows of the primary stream whose key is present / absent in the other.
-- **`aggregate`** — fold child streams under a master (or a key-derived group) by key; SQL-style group/aggregate; multi-level nesting by composition.
 - **`union(streams, lessFn)` / `intersection(streams, lessFn)` / `difference(streamA, streamsB, lessFn)`** — set operations on sorted streams by value.
 - **`merge(streams, lessFn, options?)`** — k-way sorted merge without dedup; the suite's foundational op (was `mergeSorted`).
 

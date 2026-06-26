@@ -4,7 +4,7 @@
 
 **Node-only.** The package targets server / CLI contexts. The disk-backed sort relies on `node:fs`, `node:os`, `node:path`; there is no web entry point and no browser test surface. Sorting at billion-record scale is a server problem.
 
-The package is mid-build. The wrapper protocol, its two built-in implementations, both sort algorithms (`sort`, `polyphaseSort`), and the join family (`join`, `leftJoin`, `fullJoin`) have shipped (see below); the remaining sorted-stream operations are still **(planned)**.
+The package is mid-build. The wrapper protocol, its two built-in implementations, both sort algorithms (`sort`, `polyphaseSort`), the join family (`join`, `leftJoin`, `fullJoin`), and `aggregate` have shipped (see below); the remaining sorted-stream operations are still **(planned)**.
 
 ## Project layout
 
@@ -101,9 +101,20 @@ Key-based join of two or more sorted streams, at `src/sorted/{join,left-join,ful
 
 Filters emitting rows of the primary stream whose key is present (`matching`) or absent (`unmatched`) in the other — no `combine`, no product; whole rows pass. The former semi/anti joins; share the merge walk with the set ops.
 
-### `aggregate` (planned)
+### `aggregate(master, children, options)` — group/fold sorted streams (shipped)
 
-Fold child streams under a master (or a key-derived group) by key — SQL-style group/aggregate. Per child: `init()` / `fold(acc, item)` / `finalize(acc)` (default collect-to-array). Multi-level nesting is done by composition (`join`-enrich → re-`sort` → flat `aggregate` per level), not a recursive descriptor.
+Group sorted child streams under a master by key, folding each child's per-key group into one result — SQL-style `GROUP BY` over streams, one output row per key. At `src/sorted/aggregate.js` (re-exported from the index), sharing the same group-aware merge and peekable reader (`src/reader.js`) as the join family.
+
+**The master** drives the spine and is one of two forms:
+
+- a **`{input, key, init?, fold?, finalize?}` descriptor** — an external master stream (a dimension table); its keys define which rows emit (a master key with no children still emits; child items with no master are dropped). Duplicate master rows at a key fold to one base — first row wins by default; an `init`/`fold`/`finalize` can merge them.
+- a **`key => object` function** — the base is synthesized from the group key (group-by); the spine is then the children's own keys.
+
+**Children** are a named map; each folds its per-key group with `init()` (no args) / `fold(acc, item)` / `finalize(acc)` (default = collect-to-array), scoped to the master's key boundaries — a master with no items for a child gets `finalize(init())`. `required: true` drops masters whose group for that child is empty. Every scalar SQL aggregate is a fold (count, sum, avg via finalize, min/max, array_agg = the default — ordering free since children arrive sorted).
+
+**Options:** `compareKey` **or** `lessKey` (composite/tuple keys need an explicit comparator); `combine(base, parts)` builds each row from the master base and the named bag of child results (default `{...base, ...parts}`, `undefined` drops the row); `maxGroupSize` guards a runaway group.
+
+**Multi-level nesting** (department → employee → equipment) is composition, not a built-in: a `join` to enrich foreign keys, a re-`sort` to the ancestor key path, then a flat `aggregate` per level (`aggregate` emits in key order, so its output feeds the next level still sorted).
 
 ### Set operations on sorted streams (planned)
 
@@ -135,12 +146,13 @@ src/index.js → src/wrapper.js             (shipped — protocol bases + consum
             → src/polyphase-sort.js       (shipped — polyphase merge sort)
             → src/sorted/join.js, src/sorted/left-join.js,
               src/sorted/full-join.js     (shipped — join family)
-            → src/sorted/matching.js, src/sorted/unmatched.js, src/sorted/aggregate.js,
+            → src/sorted/aggregate.js     (shipped — group / fold)
+            → src/sorted/matching.js, src/sorted/unmatched.js,
               src/sorted/union.js, src/sorted/intersection.js,
               src/sorted/difference.js, src/sorted/merge.js   (planned)
 
-src/sort.js, src/polyphase-sort.js → src/ordering.js  (shipped — shared comparator + stability)
-src/polyphase-sort.js, src/sorted/engine.js → src/reader.js   (shipped — peekable reader)
+src/sort.js, src/polyphase-sort.js, src/sorted/* → src/ordering.js  (shipped — comparator + stability + defaultCompare)
+src/polyphase-sort.js, src/sorted/engine.js, src/sorted/aggregate.js → src/reader.js   (shipped — peekable reader)
 src/sorted/{join,left-join,full-join}.js → src/sorted/engine.js  (shipped — prepare + runJoin)
                         ↓
                    stream-join (select, sortedInsert, pickFirst)   — k-way sort + ops

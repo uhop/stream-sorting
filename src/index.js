@@ -8,3 +8,4 @@ export {default as polyphaseSort} from './polyphase-sort.js';
 export {default as join} from './sorted/join.js';
 export {default as leftJoin} from './sorted/left-join.js';
 export {default as fullJoin} from './sorted/full-join.js';
+export {default as aggregate} from './sorted/aggregate.js';

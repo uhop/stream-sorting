@@ -10,3 +10,9 @@ export {
 export {default as join, type JoinInput, type JoinOptions} from './sorted/join.js';
 export {default as leftJoin} from './sorted/left-join.js';
 export {default as fullJoin} from './sorted/full-join.js';
+export {
+  default as aggregate,
+  type AggregateChild,
+  type AggregateMaster,
+  type AggregateOptions
+} from './sorted/aggregate.js';

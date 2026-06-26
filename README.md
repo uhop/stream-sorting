@@ -15,7 +15,7 @@ Runtime dependencies: [`stream-chain`](https://www.npmjs.com/package/stream-chai
 
 ## Status
 
-**Early development.** The object-stream wrapper protocol, both sort algorithms (`sort`, `polyphaseSort`), and the join family (`join`, `leftJoin`, `fullJoin`) are implemented; the remaining sorted-stream operations (filters, `aggregate`, set ops, `merge`) are planned. See the [wiki](https://github.com/uhop/stream-sorting/wiki) for usage and `ARCHITECTURE.md` for the design.
+**Early development.** The object-stream wrapper protocol, both sort algorithms (`sort`, `polyphaseSort`), and the join family (`join`, `leftJoin`, `fullJoin`), and `aggregate` are implemented; the remaining sorted-stream operations (filters, set ops, `merge`) are planned. See the [wiki](https://github.com/uhop/stream-sorting/wiki) for usage and `ARCHITECTURE.md` for the design.
 
 ## Installation
 
@@ -41,11 +41,11 @@ for await (const item of sort(input, {compare: (a, b) => a.id - b.id, tmpDir: '/
 - **[`polyphaseSort`](https://github.com/uhop/stream-sorting/wiki/polyphaseSort)** — polyphase merge sort; a fixed file budget, for bounded or heterogeneous storage.
 - **Wrapper protocol** — [`ObjectStreamWrapper`](https://github.com/uhop/stream-sorting/wiki/ObjectStreamWrapper) with built-in [`MemoryWrapper`](https://github.com/uhop/stream-sorting/wiki/MemoryWrapper) and [`LocalFileWrapper`](https://github.com/uhop/stream-sorting/wiki/LocalFileWrapper). The storage abstraction the sorts read and write through, so a sort can exceed any single disk.
 - **[`join`](https://github.com/uhop/stream-sorting/wiki/join)** / **[`leftJoin`](https://github.com/uhop/stream-sorting/wiki/leftJoin)** / **[`fullJoin`](https://github.com/uhop/stream-sorting/wiki/fullJoin)** — key-based join of two or more sorted streams; named-map inputs, Cartesian product on equal keys, `combine` over a named bag, inner + outer shapes.
+- **[`aggregate`](https://github.com/uhop/stream-sorting/wiki/aggregate)** — fold sorted child streams under a master by key (SQL-style group/aggregate); the master is a `{input, key}` stream or a `key => object` function, children fold via `init`/`fold`/`finalize`, one row per key.
 
 ### Planned
 
 - **`matching`** / **`unmatched`** — filters: rows of the primary stream whose key is present / absent in the other.
-- **`aggregate`** — fold child streams under a master (or a key-derived group) by key; SQL-style group/aggregate.
 - **`union`** / **`intersection`** / **`difference`** — set operations on sorted streams.
 - **`merge`** — k-way sorted merge without deduplication; the suite's foundational op.
 

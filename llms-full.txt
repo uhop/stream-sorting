@@ -4,7 +4,7 @@ External merge sort and sorted-stream operations for object-mode Node `Readable`
 
 ## Status
 
-The package is mid-build. The wrapper protocol, two built-in wrappers (`MemoryWrapper`, `LocalFileWrapper`), both sort algorithms (`sort`, `polyphaseSort`), and the join family (`join`, `leftJoin`, `fullJoin`) have shipped. Components below marked **(planned)** are still unimplemented. The shape captured here is the design target — implementation lands incrementally per `projects/stream-sorting/queue.md` in Eugene's vault.
+The package is mid-build. The wrapper protocol, two built-in wrappers (`MemoryWrapper`, `LocalFileWrapper`), both sort algorithms (`sort`, `polyphaseSort`), the join family (`join`, `leftJoin`, `fullJoin`), and `aggregate` have shipped. Components below marked **(planned)** are still unimplemented. The shape captured here is the design target — implementation lands incrementally per `projects/stream-sorting/queue.md` in Eugene's vault.
 
 ## Object-stream wrapper protocol (shipped)
 
@@ -262,9 +262,40 @@ Implemented as a custom group-aware merge (the D3 exception, like `polyphaseSort
 
 Filters emitting rows of the primary stream based on whether the key is present (`matching`) or absent (`unmatched`) in the other — no `combine`, no product; whole rows pass through. The former semi/anti joins; they share the merge walk with the set operations and may be exposed as aliases of keyed `intersection` / `difference`.
 
-### `aggregate` (planned)
+### `aggregate(master, children, options)` — group/fold sorted streams by key
 
-Fold child streams under a master (or a key-derived group) by key — SQL-style group/aggregate. Per child: `init()` / `fold(acc, item)` / `finalize(acc)`, default collect-to-array, covering every scalar SQL aggregate (`array_agg` ordering is free since children arrive sorted). Multi-level nesting (department → employee → equipment) is done by composition — a `join` to enrich foreign keys, a re-`sort` to the ancestor key path, then a flat `aggregate` per level — not a recursive descriptor.
+```ts
+type Fold<T, A, R> = {
+  input: AsyncIterable<T> | Iterable<T>;
+  key?: (item: T) => any;
+  init?: () => A; // create a fresh accumulator (no args)
+  fold?: (acc: A, item: T) => A; // default: push the item
+  finalize?: (acc: A) => R; // default: identity
+};
+
+function aggregate<R>(
+  master: (Fold<any, any, any> & {input: AsyncIterable<any> | Iterable<any>}) | ((key: any) => any),
+  children: Record<string, Fold<any, any, any> & {required?: boolean}>,
+  options?: {
+    compareKey?: (a: any, b: any) => number;
+    lessKey?: (a: any, b: any) => boolean;
+    combine?: (base: any, parts: Record<string, any>) => R | undefined; // default {...base, ...parts}
+    maxGroupSize?: number;
+  }
+): AsyncGenerator<R, void, void>;
+```
+
+Import from `stream-sorting/sorted/aggregate.js` (re-exported from the index). SQL-style `GROUP BY` over sorted streams: one output row per key, streaming and single-pass (only one group's accumulators are live; a scalar fold holds nothing).
+
+**The master** drives the spine, in two forms:
+- a **`{input, key, init?, fold?, finalize?}` descriptor** — an external master stream; its keys decide which rows emit (a master key with no children still emits; child items with no master are dropped). Duplicate master rows at a key fold into one base — **first row wins by default**; an `init`/`fold`/`finalize` can merge them.
+- a **`key => object` function** — the base is synthesized from the group key (group-by); the spine is then the children's own distinct keys.
+
+**Children** are a named map. Each folds its per-key group with `init()` (no args) / `fold(acc, item)` / `finalize(acc)`, scoped to the master's key boundaries — a master with no items for a child gets `finalize(init())` (e.g. `[]`, or `0` for a count). Default fold is collect-to-array. Every scalar SQL aggregate is a fold: COUNT, SUM, AVG (finalize divides), MIN/MAX, ARRAY_AGG (the default — ordering free since children arrive sorted), STRING_AGG, COUNT(DISTINCT) via a Set. `required: true` drops masters whose group for that child is empty.
+
+**`combine(base, parts)`** builds each output row from the master base and the named bag of child results (default `{...base, ...parts}`; return `undefined` to drop the row). `compareKey` **or** `lessKey` orders keys (composite/tuple keys need an explicit comparator); `maxGroupSize` guards a runaway group.
+
+**Multi-level nesting** (department → employee → equipment) is composition, not a built-in: a `join` to enrich foreign keys, a re-`sort` to the ancestor key path, then a flat `aggregate` per level (`aggregate` emits in key order, so its output feeds the next level still sorted). Implemented as the same custom group-aware merge sharing `src/reader.js`.
 
 ### `merge(streams, lessFn, options?)` — sorted merge without dedup (planned)
 
