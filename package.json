@@ -9,18 +9,15 @@
     ".": "./src/index.js",
     "./*": "./src/*"
   },
-  "engines": {
-    "node": ">=22"
-  },
   "scripts": {
     "test": "tape6 --flags FO",
     "test:bun": "tape6-bun --flags FO",
-    "test:deno": "deno run --allow-all --ext=js node_modules/tape-six/bin/tape6-deno.js --flags FO",
+    "test:deno": "tape6-deno --flags FO",
     "ts-check": "tsc --noEmit",
     "js-check": "tsc --project tsconfig.check.json",
     "ts-test": "tape6 --flags FO 'tests/test-*.ts'",
     "ts-test:bun": "tape6-bun --flags FO 'tests/test-*.ts'",
-    "ts-test:deno": "deno run --allow-all --ext=js node_modules/tape-six/bin/tape6-deno.js --flags FO 'tests/test-*.ts'",
+    "ts-test:deno": "tape6-deno --flags FO 'tests/test-*.ts'",
     "lint": "prettier --check .",
     "lint:fix": "prettier --write ."
   },
@@ -43,8 +40,6 @@
   ],
   "author": "Eugene Lazutkin <eugene.lazutkin@gmail.com> (https://www.lazutkin.com/)",
   "funding": "https://github.com/sponsors/uhop",
-  "llms": "https://raw.githubusercontent.com/uhop/stream-sorting/main/llms.txt",
-  "llmsFull": "https://raw.githubusercontent.com/uhop/stream-sorting/main/llms-full.txt",
   "license": "BSD-3-Clause",
   "bugs": {
     "url": "https://github.com/uhop/stream-sorting/issues"
@@ -67,9 +62,9 @@
     "stream-join": "^2.0.0"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
-    "prettier": "^3.8.5",
-    "tape-six": "^1.10.1",
-    "typescript": "^6.0.3"
+    "@types/node": "^26.1.2",
+    "prettier": "^3.9.6",
+    "tape-six": "^1.16.2",
+    "typescript": "^7.0.2"
   }
 }

@@ -120,3 +120,4 @@ class MemoryWrapper extends ObjectStreamWrapper {
 }
 
 export default MemoryWrapper;
+export {MemoryWrapper};

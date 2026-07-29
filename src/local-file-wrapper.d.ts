@@ -22,3 +22,4 @@ export declare function makeTmpWrapperFactory(
 ): (index: number) => LocalFileWrapper;
 
 export default LocalFileWrapper;
+export {LocalFileWrapper};

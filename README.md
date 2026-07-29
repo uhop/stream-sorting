@@ -64,7 +64,7 @@ Together, the family closes the billion-row pipeline story end-to-end in pure No
 - AI agent rules: `AGENTS.md`.
 - Architecture: `ARCHITECTURE.md`.
 - AI-facing reference: `llms.txt` (short) and `llms-full.txt` (long).
-- Wiki (usage docs, design notes): <https://github.com/uhop/stream-sorting/wiki>.
+- Wiki (usage docs, design notes): browse the **[wiki](https://github.com/uhop/stream-sorting/wiki)** — [index](https://github.com/uhop/stream-sorting/wiki/Home) or [search](https://uhop.github.io/wiki-search/app/?wiki=uhop/stream-sorting).
 
 ## Release notes
 

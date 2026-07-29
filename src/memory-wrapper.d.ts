@@ -8,3 +8,4 @@ import {ObjectStreamWrapper} from './wrapper.js';
 declare class MemoryWrapper<T = unknown> extends ObjectStreamWrapper<T> {}
 
 export default MemoryWrapper;
+export {MemoryWrapper};

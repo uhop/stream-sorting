@@ -54,6 +54,7 @@ stream-sorting/
 - **Prettier** for formatting (see `.prettierrc`): 100 char width, single quotes, no bracket spacing, no trailing commas, arrow parens "avoid".
 - 2-space indentation.
 - Semicolons are enforced by Prettier (default `semi: true`).
+- **Comments are _why_-markers only** — a non-trivial decision or constraint, an algorithm reference, or explicitly requested JSDoc; never narrate _what_ the code does (fleet convention `no-narrating-comments`).
 
 ## Critical rules
 
@@ -65,7 +66,6 @@ stream-sorting/
 - **k-way merge reuses `stream-join`.** The `sort` merge phase composes `select` + `sortedInsert(lessFn)` from `stream-join` (via `mergeSorted`) — do not reimplement. `polyphaseSort` (series-aware) and the join family (equal-key grouping + Cartesian product) are the deliberate D3 exceptions: their merges are hand-written, sharing one peekable reader at `src/reader.js`, because a flat merge can't express sub-stream structure.
 - **Comparator API follows `Array.prototype.sort`.** Comparators are `(a, b) => number`: negative if `a < b`, positive if `a > b`, zero if equal. Helpers may provide `lessFn = (a, b) => bool` adapters where the underlying primitive expects one.
 - **Do not modify or delete test expectations** without understanding why they changed.
-- **Do not add comments or remove comments** unless explicitly asked.
 - **Keep `.js` and `.d.ts` files in sync** for every source file, each `.js` carrying the `// @ts-self-types="./X.d.ts"` directive at the top. The `.d.ts` holds type signatures plus a one-line purpose and an `@see` wiki link per export — no algorithm descriptions, no usage examples. All descriptions, options, and examples live in the [wiki](https://github.com/uhop/stream-sorting/wiki), not in `.d.ts` or `.js`.
 - **Helpers live under `src/utils/`.** Main components and shared infrastructure stay at `src/` root.
 

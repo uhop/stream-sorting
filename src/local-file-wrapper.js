@@ -43,18 +43,20 @@ class LocalFileWriter extends ItemWriter {
     if (this._pendingError) return Promise.reject(this._pendingError);
     const ok = fileStream.write(chunk);
     if (ok) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      const onDrain = () => {
-        fileStream.removeListener('error', onError);
-        resolve();
-      };
-      const onError = err => {
-        fileStream.removeListener('drain', onDrain);
-        reject(err);
-      };
-      fileStream.once('drain', onDrain);
-      fileStream.once('error', onError);
-    });
+    return /** @type {Promise<void>} */ (
+      new Promise((resolve, reject) => {
+        const onDrain = () => {
+          fileStream.removeListener('error', onError);
+          resolve();
+        };
+        const onError = err => {
+          fileStream.removeListener('drain', onDrain);
+          reject(err);
+        };
+        fileStream.once('drain', onDrain);
+        fileStream.once('error', onError);
+      })
+    );
   }
 
   async write(item) {
@@ -68,27 +70,29 @@ class LocalFileWriter extends ItemWriter {
       const fileStream = this._fileStream;
       const wrapper = this._wrapper;
       const self = this;
-      this._endPromise = new Promise((resolve, reject) => {
-        const settle = err => {
-          if (wrapper._writer === self) {
-            wrapper._mode = MODE_IDLE;
-            wrapper._writer = null;
-          }
-          if (err) reject(err);
-          else resolve();
-        };
-        const onFinish = () => {
-          fileStream.removeListener('error', onError);
-          settle();
-        };
-        const onError = err => {
-          fileStream.removeListener('finish', onFinish);
-          settle(err);
-        };
-        fileStream.once('finish', onFinish);
-        fileStream.once('error', onError);
-        fileStream.end();
-      });
+      this._endPromise = /** @type {Promise<void>} */ (
+        new Promise((resolve, reject) => {
+          const settle = err => {
+            if (wrapper._writer === self) {
+              wrapper._mode = MODE_IDLE;
+              wrapper._writer = null;
+            }
+            if (err) reject(err);
+            else resolve();
+          };
+          const onFinish = () => {
+            fileStream.removeListener('error', onError);
+            settle();
+          };
+          const onError = err => {
+            fileStream.removeListener('finish', onFinish);
+            settle(err);
+          };
+          fileStream.once('finish', onFinish);
+          fileStream.once('error', onError);
+          fileStream.end();
+        })
+      );
     }
     return this._endPromise;
   }
@@ -215,3 +219,4 @@ export const makeTmpWrapperFactory = (tmpDir, tag = '') => {
 };
 
 export default LocalFileWrapper;
+export {LocalFileWrapper};
